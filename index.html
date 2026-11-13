@@ -1663,7 +1663,9 @@
 
     async function sendTelegramLiveEntryAlert(snap, m) {
       const cfg = getTelegramLocalConfig();
-      if (!cfg.enabled || !cfg.botToken || !cfg.chatId) return;
+      if (!cfg.enabled || !cfg.botToken || !cfg.chatId) return false;
+      if (snap._tgSending) return false;
+      snap._tgSending = true;
       const msg = [
         `🟢🔥 <b>ENTRA ORA • SEMAFORO VERDE (${snap.triggerScore}/100)</b>`,
         `⚽ <b>${snap.match}</b> (${snap.league})`,
@@ -1676,7 +1678,17 @@
         '',
         '🔗 <a href="https://salvo061978.github.io/apex-edge-betting/">Apri Betfair & Dettaglio Live</a>'
       ].join('\n');
-      await sendTelegramMessage(msg, cfg);
+      const res = await sendTelegramMessage(msg, cfg);
+      snap._tgSending = false;
+      if (res && res.ok) {
+        snap.telegramNotified = true;
+        saveUiState();
+        return true;
+      } else {
+        const st = document.getElementById('bf-vault-status');
+        if (st && res?.error) st.textContent = `❌ Errore invio Telegram Live: ${res.error}`;
+        return false;
+      }
     }
 
     async function sendTelegramLiveResultAlert(item) {
@@ -3023,7 +3035,12 @@
       if (!topSig || sem.status !== 'ENTER_NOW') return;
       const snapId = `live-auto-${m.id}`;
       const existing = LIVE_SIGNALS_HISTORY.find(item => item.id === snapId);
-      if (existing) return; // Già congelato al primo trigger verde!
+      if (existing) {
+        if (existing.outcome === 'PENDING' && !existing.telegramNotified) {
+          sendTelegramLiveEntryAlert(existing, m);
+        }
+        return; // Già congelato al primo trigger verde!
+      }
 
       const s = m.liveStats;
       const newSnap = {
@@ -3045,7 +3062,8 @@
         matchedBetfairOdd: betfairCustomOdds[topSig.id] || topSig.liveOdd || topSig.minBetfairOdd,
         finalScore: 'IN CORSO',
         resolutionNote: `⏳ Segnale congelato al ${m.minute}' sul punteggio di ${m.scoreHome}-${m.scoreAway}. Verifica automatica al 90' (FT).`,
-        outcome: 'PENDING'
+        outcome: 'PENDING',
+        telegramNotified: false
       };
       LIVE_SIGNALS_HISTORY.unshift(newSnap);
       saveUiState();

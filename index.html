@@ -337,14 +337,18 @@
                 </div>
                 <span class="text-[10px] text-[var(--muted-foreground)]">Crea il bot con <code>@BotFather</code> e leggi il tuo ID con <code>@userinfobot</code></span>
               </div>
-              <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
                 <div>
                   <label class="block text-[10px] font-mono uppercase text-[var(--muted-foreground)] mb-1">Telegram Bot Token (Locale)</label>
                   <input id="tg-local-token" type="password" placeholder="Es. 123456789:ABCdefGHIjklMNOpqrs..." class="w-full bg-[var(--card)] border border-[var(--border)] rounded px-2.5 py-1.5 font-mono text-xs text-[var(--foreground)]" />
                 </div>
                 <div>
-                  <label class="block text-[10px] font-mono uppercase text-[var(--muted-foreground)] mb-1">Telegram Chat ID (Locale)</label>
-                  <input id="tg-local-chatid" type="text" placeholder="Es. 987654321" class="w-full bg-[var(--card)] border border-[var(--border)] rounded px-2.5 py-1.5 font-mono text-xs text-[var(--foreground)]" />
+                  <label class="block text-[10px] font-mono uppercase text-[var(--muted-foreground)] mb-1">Chat ID / Gruppo (Locale)</label>
+                  <input id="tg-local-chatid" type="text" placeholder="Es. 987654321 o -100123456789" class="w-full bg-[var(--card)] border border-[var(--border)] rounded px-2.5 py-1.5 font-mono text-xs text-[var(--foreground)]" />
+                </div>
+                <div>
+                  <label class="block text-[10px] font-mono uppercase text-[var(--muted-foreground)] mb-1">Topic / Sottocanale ID (Opzionale)</label>
+                  <input id="tg-local-threadid" type="text" placeholder="Es. 42 (vuoto = chat diretta)" class="w-full bg-[var(--card)] border border-[var(--border)] rounded px-2.5 py-1.5 font-mono text-xs text-[var(--foreground)]" />
                 </div>
               </div>
               <div class="flex flex-wrap items-center gap-4 text-[11px]">
@@ -1505,16 +1509,17 @@
     function getTelegramLocalConfig() {
       try {
         const raw = localStorage.getItem(TELEGRAM_LOCAL_VAULT_KEY);
-        if (!raw) return { botToken: '', chatId: '', enabled: true, notifyResults: true };
+        if (!raw) return { botToken: '', chatId: '', threadId: '', enabled: true, notifyResults: true };
         const parsed = JSON.parse(raw);
         return {
           botToken: String(parsed.botToken || '').trim(),
           chatId: String(parsed.chatId || '').trim(),
+          threadId: String(parsed.threadId || '').trim(),
           enabled: parsed.enabled !== false,
           notifyResults: parsed.notifyResults !== false
         };
       } catch (_) {
-        return { botToken: '', chatId: '', enabled: true, notifyResults: true };
+        return { botToken: '', chatId: '', threadId: '', enabled: true, notifyResults: true };
       }
     }
 
@@ -1547,10 +1552,12 @@
         const tg = getTelegramLocalConfig();
         const tgTok = document.getElementById('tg-local-token');
         const tgChat = document.getElementById('tg-local-chatid');
+        const tgThread = document.getElementById('tg-local-threadid');
         const tgEn = document.getElementById('tg-local-enabled');
         const tgRes = document.getElementById('tg-local-results');
         if (tgTok && tg.botToken) tgTok.value = tg.botToken;
         if (tgChat && tg.chatId) tgChat.value = tg.chatId;
+        if (tgThread && tg.threadId) tgThread.value = tg.threadId;
         if (tgEn) tgEn.checked = tg.enabled;
         if (tgRes) tgRes.checked = tg.notifyResults;
         updateTelegramVaultBadge(tg);
@@ -1570,9 +1577,10 @@
 
         const botToken = document.getElementById('tg-local-token')?.value.trim() || '';
         const chatId = document.getElementById('tg-local-chatid')?.value.trim() || '';
+        const threadId = document.getElementById('tg-local-threadid')?.value.trim() || '';
         const enabled = document.getElementById('tg-local-enabled')?.checked !== false;
         const notifyResults = document.getElementById('tg-local-results')?.checked !== false;
-        const tgCfg = { botToken, chatId, enabled, notifyResults, savedAt: new Date().toISOString() };
+        const tgCfg = { botToken, chatId, threadId, enabled, notifyResults, savedAt: new Date().toISOString() };
         localStorage.setItem(TELEGRAM_LOCAL_VAULT_KEY, JSON.stringify(tgCfg));
         updateTelegramVaultBadge(tgCfg);
 
@@ -1591,11 +1599,13 @@
         const ss = document.getElementById('bf-local-ssoid');
         const tgTok = document.getElementById('tg-local-token');
         const tgChat = document.getElementById('tg-local-chatid');
+        const tgThread = document.getElementById('tg-local-threadid');
         const st = document.getElementById('bf-vault-status');
         if (ak) ak.value = '';
         if (ss) ss.value = '';
         if (tgTok) tgTok.value = '';
         if (tgChat) tgChat.value = '';
+        if (tgThread) tgThread.value = '';
         updateTelegramVaultBadge({ botToken: '', chatId: '', enabled: false });
         if (st) st.textContent = '🗑️ Credenziali locali Betfair e Telegram rimosse da questo dispositivo.';
       } catch (_) {}
@@ -1605,15 +1615,19 @@
       const cfg = overrideCfg || getTelegramLocalConfig();
       if (!cfg.botToken || !cfg.chatId) return { ok: false, error: 'Token o Chat ID mancanti' };
       try {
+        const payload = {
+          chat_id: cfg.chatId,
+          text: htmlText,
+          parse_mode: 'HTML',
+          disable_web_page_preview: true
+        };
+        if (cfg.threadId && /^\d+$/.test(cfg.threadId)) {
+          payload.message_thread_id = parseInt(cfg.threadId, 10);
+        }
         const res = await fetch(`https://api.telegram.org/bot${encodeURIComponent(cfg.botToken)}/sendMessage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_id: cfg.chatId,
-            text: htmlText,
-            parse_mode: 'HTML',
-            disable_web_page_preview: true
-          })
+          body: JSON.stringify(payload)
         });
         const data = await res.json();
         return data && data.ok ? { ok: true, data } : { ok: false, error: data?.description || `HTTP ${res.status}` };

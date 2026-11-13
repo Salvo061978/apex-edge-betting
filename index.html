@@ -266,7 +266,7 @@
 
             <div class="flex flex-wrap items-center gap-1.5">
               <button onclick="toggleBetfairVaultPanel()" class="px-2.5 py-1.5 rounded-lg text-[11px] md:text-xs font-bold bg-[var(--warning)]/15 border border-[var(--warning)]/50 text-[var(--warning)] hover:bg-[var(--warning)]/25 transition">
-                🔐 Account Betfair (Locale • Zero GitHub)
+                🔐 Betfair & Telegram (Locale • Zero GitHub)
               </button>
               <button id="btn-toggle-live-autorefresh" onclick="toggleLiveAutoRefresh()" class="px-2.5 py-1.5 rounded-lg text-[11px] md:text-xs font-mono font-bold bg-[var(--background)] border border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)] transition">
                 ▶️ Auto-Sync 25s: ON
@@ -302,16 +302,16 @@
             </div>
           </div>
 
-          <!-- PANNELLO CASSAFORTE LOCALE BETFAIR API (SOLO DISPOSITIVO, MAI SU GITHUB) -->
-          <div id="betfair-vault-panel" class="hidden p-3 rounded-xl bg-[var(--background)] border-2 border-[var(--warning)]/60 space-y-2.5 text-xs">
+          <!-- PANNELLO CASSAFORTE LOCALE BETFAIR & TELEGRAM (SOLO DISPOSITIVO, MAI SU GITHUB) -->
+          <div id="betfair-vault-panel" class="hidden p-3 rounded-xl bg-[var(--background)] border-2 border-[var(--warning)]/60 space-y-3 text-xs">
             <div class="flex items-center justify-between border-b border-[var(--border)] pb-2">
               <div class="font-bold text-[var(--warning)] flex items-center gap-1.5">
-                <span>🔐 Cassaforte Privata Betfair Exchange API (Salvata SOLO sul tuo Dispositivo • 0% su GitHub)</span>
+                <span>🔐 Cassaforte Privata Locale — Betfair API & Notifiche Telegram (0% su GitHub)</span>
               </div>
               <button onclick="toggleBetfairVaultPanel()" class="px-2 py-0.5 rounded bg-[var(--secondary)] font-bold">✕ Chiudi</button>
             </div>
             <p class="text-[var(--muted-foreground)] m-0">
-              <strong>Garanzia di Sicurezza:</strong> Qualsiasi dato inserito qui sotto viene salvato esclusivamente nel <code>localStorage</code> privato del browser sul tuo telefono/PC. <strong>Nessuna credenziale viene mai scritta nel codice sorgente o inviata a GitHub.</strong> Per l'invio automatico degli ordini (<code>placeOrders</code> su <code>api.betfair.it</code>), l'app invia il payload JSON al tuo Bridge Locale/Privato.
+              <strong>Garanzia di Sicurezza:</strong> Qualsiasi dato inserito qui sotto viene salvato esclusivamente nel <code>localStorage</code> privato del browser sul tuo telefono/PC. <strong>Nessun token o credenziale viene mai scritto nel codice sorgente o inviato a GitHub.</strong>
             </p>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
               <div>
@@ -327,10 +327,43 @@
                 <input id="bf-local-bridge" type="text" placeholder="http://127.0.0.1:8787/placeOrder" class="w-full bg-[var(--card)] border border-[var(--border)] rounded px-2.5 py-1.5 font-mono text-xs text-[var(--foreground)]" />
               </div>
             </div>
-            <div class="flex flex-wrap items-center justify-between gap-2 pt-1">
+
+            <!-- Sezione Notifiche Telegram Live (100% Locale) -->
+            <div class="pt-2 border-t border-[var(--border)] space-y-2">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="font-bold text-[#38bdf8] flex items-center gap-1.5">
+                  <span>📲 Notifiche Telegram Live (100% Locale)</span>
+                  <span id="tg-vault-badge" class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-[var(--secondary)] text-[var(--muted-foreground)]">NON CONFIGURATO</span>
+                </div>
+                <span class="text-[10px] text-[var(--muted-foreground)]">Crea il bot con <code>@BotFather</code> e leggi il tuo ID con <code>@userinfobot</code></span>
+              </div>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                <div>
+                  <label class="block text-[10px] font-mono uppercase text-[var(--muted-foreground)] mb-1">Telegram Bot Token (Locale)</label>
+                  <input id="tg-local-token" type="password" placeholder="Es. 123456789:ABCdefGHIjklMNOpqrs..." class="w-full bg-[var(--card)] border border-[var(--border)] rounded px-2.5 py-1.5 font-mono text-xs text-[var(--foreground)]" />
+                </div>
+                <div>
+                  <label class="block text-[10px] font-mono uppercase text-[var(--muted-foreground)] mb-1">Telegram Chat ID (Locale)</label>
+                  <input id="tg-local-chatid" type="text" placeholder="Es. 987654321" class="w-full bg-[var(--card)] border border-[var(--border)] rounded px-2.5 py-1.5 font-mono text-xs text-[var(--foreground)]" />
+                </div>
+              </div>
+              <div class="flex flex-wrap items-center gap-4 text-[11px]">
+                <label class="inline-flex items-center gap-1.5 cursor-pointer">
+                  <input id="tg-local-enabled" type="checkbox" class="accent-[#38bdf8]" checked />
+                  <span>Invia alert automatico su <strong>🟢🔥 ENTRA ORA</strong></span>
+                </label>
+                <label class="inline-flex items-center gap-1.5 cursor-pointer">
+                  <input id="tg-local-results" type="checkbox" class="accent-[#38bdf8]" checked />
+                  <span>Invia anche verifica esito finale <strong>FT (✅/❌)</strong></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-[var(--border)]">
               <span id="bf-vault-status" class="font-mono text-[11px] text-[var(--success)]">🔒 Nessuna credenziale presente su GitHub. Cassaforte locale pronta.</span>
-              <div class="flex items-center gap-2">
-                <button onclick="saveBetfairLocalVault()" class="px-3 py-1 rounded bg-[var(--primary)] text-[var(--primary-foreground)] font-bold">💾 Salva Solo su Questo Dispositivo</button>
+              <div class="flex flex-wrap items-center gap-2">
+                <button onclick="testTelegramNotification()" class="px-2.5 py-1 rounded bg-[#38bdf8]/20 text-[#38bdf8] border border-[#38bdf8]/40 font-bold hover:bg-[#38bdf8]/30 transition">📲 Test Telegram</button>
+                <button onclick="saveBetfairLocalVault()" class="px-3 py-1 rounded bg-[var(--primary)] text-[var(--primary-foreground)] font-bold">💾 Salva Tutto Solo in Locale</button>
                 <button onclick="clearBetfairLocalVault()" class="px-2.5 py-1 rounded bg-[var(--error)]/20 text-[var(--error)] border border-[var(--error)]/40 font-bold">🗑️ Cancella Dati Locali</button>
               </div>
             </div>
@@ -1353,6 +1386,7 @@
     const UI_STATE_STORAGE_KEY = 'apex_edge_ui_state_v3';
     const LIVE_HISTORY_STORAGE_KEY = 'apex_edge_live_signals_v1';
     const BETFAIR_LOCAL_VAULT_KEY = 'apex_betfair_local_vault_only';
+    const TELEGRAM_LOCAL_VAULT_KEY = 'apex_telegram_local_vault_only';
     let currentPage = 'palinsesto';
     let selectedDay = 'DOMANI_12'; // Default su OGGI Gio 12/11 ('DOMANI_12' | 'OGGI_11' | 'VEN_DOM_13_15' | 'CLUB_7_21' | 'ALL')
     let palinsestoLayout = 'compact';
@@ -1468,11 +1502,40 @@
       if (p) p.classList.toggle('hidden');
     }
 
+    function getTelegramLocalConfig() {
+      try {
+        const raw = localStorage.getItem(TELEGRAM_LOCAL_VAULT_KEY);
+        if (!raw) return { botToken: '', chatId: '', enabled: true, notifyResults: true };
+        const parsed = JSON.parse(raw);
+        return {
+          botToken: String(parsed.botToken || '').trim(),
+          chatId: String(parsed.chatId || '').trim(),
+          enabled: parsed.enabled !== false,
+          notifyResults: parsed.notifyResults !== false
+        };
+      } catch (_) {
+        return { botToken: '', chatId: '', enabled: true, notifyResults: true };
+      }
+    }
+
+    function updateTelegramVaultBadge(cfg) {
+      const badge = document.getElementById('tg-vault-badge');
+      if (!badge) return;
+      if (cfg && cfg.botToken && cfg.chatId) {
+        badge.textContent = cfg.enabled ? 'ATTIVO IN LOCALE' : 'IN PAUSA';
+        badge.className = cfg.enabled
+          ? 'px-1.5 py-0.5 rounded text-[10px] font-mono bg-[var(--success)]/20 text-[var(--success)] border border-[var(--success)]/40'
+          : 'px-1.5 py-0.5 rounded text-[10px] font-mono bg-[var(--warning)]/20 text-[var(--warning)] border border-[var(--warning)]/40';
+      } else {
+        badge.textContent = 'NON CONFIGURATO';
+        badge.className = 'px-1.5 py-0.5 rounded text-[10px] font-mono bg-[var(--secondary)] text-[var(--muted-foreground)]';
+      }
+    }
+
     function loadBetfairLocalVault() {
       try {
         const raw = localStorage.getItem(BETFAIR_LOCAL_VAULT_KEY);
-        if (!raw) return;
-        const v = JSON.parse(raw);
+        const v = raw ? JSON.parse(raw) : {};
         const ak = document.getElementById('bf-local-appkey');
         const ss = document.getElementById('bf-local-ssoid');
         const br = document.getElementById('bf-local-bridge');
@@ -1480,8 +1543,20 @@
         if (ak && v.appKey) ak.value = v.appKey;
         if (ss && v.ssoid) ss.value = v.ssoid;
         if (br && v.bridgeUrl) br.value = v.bridgeUrl;
-        if (st && (v.appKey || v.ssoid)) {
-          st.textContent = '🔒 Credenziali Betfair salvate SOLO nella memoria locale di questo dispositivo (0% su GitHub).';
+
+        const tg = getTelegramLocalConfig();
+        const tgTok = document.getElementById('tg-local-token');
+        const tgChat = document.getElementById('tg-local-chatid');
+        const tgEn = document.getElementById('tg-local-enabled');
+        const tgRes = document.getElementById('tg-local-results');
+        if (tgTok && tg.botToken) tgTok.value = tg.botToken;
+        if (tgChat && tg.chatId) tgChat.value = tg.chatId;
+        if (tgEn) tgEn.checked = tg.enabled;
+        if (tgRes) tgRes.checked = tg.notifyResults;
+        updateTelegramVaultBadge(tg);
+
+        if (st && (v.appKey || v.ssoid || (tg.botToken && tg.chatId))) {
+          st.textContent = '🔒 Credenziali salvate SOLO nella memoria locale di questo dispositivo (0% su GitHub).';
         }
       } catch (_) {}
     }
@@ -1492,6 +1567,15 @@
         const ssoid = document.getElementById('bf-local-ssoid')?.value.trim() || '';
         const bridgeUrl = document.getElementById('bf-local-bridge')?.value.trim() || 'http://127.0.0.1:8787/placeOrder';
         localStorage.setItem(BETFAIR_LOCAL_VAULT_KEY, JSON.stringify({ appKey, ssoid, bridgeUrl, savedAt: new Date().toISOString() }));
+
+        const botToken = document.getElementById('tg-local-token')?.value.trim() || '';
+        const chatId = document.getElementById('tg-local-chatid')?.value.trim() || '';
+        const enabled = document.getElementById('tg-local-enabled')?.checked !== false;
+        const notifyResults = document.getElementById('tg-local-results')?.checked !== false;
+        const tgCfg = { botToken, chatId, enabled, notifyResults, savedAt: new Date().toISOString() };
+        localStorage.setItem(TELEGRAM_LOCAL_VAULT_KEY, JSON.stringify(tgCfg));
+        updateTelegramVaultBadge(tgCfg);
+
         const st = document.getElementById('bf-vault-status');
         if (st) {
           st.textContent = '✅ Salvato nella memoria privata di questo dispositivo! Nessun dato viene mai inviato a GitHub.';
@@ -1502,13 +1586,97 @@
     function clearBetfairLocalVault() {
       try {
         localStorage.removeItem(BETFAIR_LOCAL_VAULT_KEY);
+        localStorage.removeItem(TELEGRAM_LOCAL_VAULT_KEY);
         const ak = document.getElementById('bf-local-appkey');
         const ss = document.getElementById('bf-local-ssoid');
+        const tgTok = document.getElementById('tg-local-token');
+        const tgChat = document.getElementById('tg-local-chatid');
         const st = document.getElementById('bf-vault-status');
         if (ak) ak.value = '';
         if (ss) ss.value = '';
-        if (st) st.textContent = '🗑️ Credenziali locali rimosse da questo dispositivo.';
+        if (tgTok) tgTok.value = '';
+        if (tgChat) tgChat.value = '';
+        updateTelegramVaultBadge({ botToken: '', chatId: '', enabled: false });
+        if (st) st.textContent = '🗑️ Credenziali locali Betfair e Telegram rimosse da questo dispositivo.';
       } catch (_) {}
+    }
+
+    async function sendTelegramMessage(htmlText, overrideCfg = null) {
+      const cfg = overrideCfg || getTelegramLocalConfig();
+      if (!cfg.botToken || !cfg.chatId) return { ok: false, error: 'Token o Chat ID mancanti' };
+      try {
+        const res = await fetch(`https://api.telegram.org/bot${encodeURIComponent(cfg.botToken)}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: cfg.chatId,
+            text: htmlText,
+            parse_mode: 'HTML',
+            disable_web_page_preview: true
+          })
+        });
+        const data = await res.json();
+        return data && data.ok ? { ok: true, data } : { ok: false, error: data?.description || `HTTP ${res.status}` };
+      } catch (err) {
+        return { ok: false, error: err?.message || 'Errore di rete' };
+      }
+    }
+
+    async function testTelegramNotification() {
+      saveBetfairLocalVault();
+      const cfg = getTelegramLocalConfig();
+      const st = document.getElementById('bf-vault-status');
+      if (!cfg.botToken || !cfg.chatId) {
+        if (st) st.textContent = '⚠️ Inserisci prima Telegram Bot Token e Chat ID locali.';
+        return;
+      }
+      if (st) st.textContent = '⏳ Invio messaggio di test su Telegram in corso...';
+      const msg = [
+        '🟢🔥 <b>APEX EDGE • TEST NOTIFICA TELEGRAM</b>',
+        '',
+        '✅ Collegamento locale attivo sul tuo dispositivo.',
+        '📲 Riceverai un alert qui ogni volta che una partita Live raggiunge <b>SEMAFORO VERDE (ENTRA ORA ≥ 72/100)</b>.',
+        '',
+        '🔗 <a href="https://salvo061978.github.io/apex-edge-betting/">Apri APEX EDGE Live</a>'
+      ].join('\n');
+      const r = await sendTelegramMessage(msg, cfg);
+      if (st) {
+        st.textContent = r.ok
+          ? '✅ Messaggio di test inviato su Telegram! Controlla il tuo smartphone.'
+          : `❌ Errore Telegram: ${r.error}`;
+      }
+    }
+
+    async function sendTelegramLiveEntryAlert(snap, m) {
+      const cfg = getTelegramLocalConfig();
+      if (!cfg.enabled || !cfg.botToken || !cfg.chatId) return;
+      const msg = [
+        `🟢🔥 <b>ENTRA ORA • SEMAFORO VERDE (${snap.triggerScore}/100)</b>`,
+        `⚽ <b>${snap.match}</b> (${snap.league})`,
+        `⏱️ Minuto: <b>${snap.triggerMinute}</b> • Risultato: <b>${snap.scoreAtTrigger}</b>`,
+        '',
+        `🎯 Mercato: <b>${snap.selection}</b>`,
+        `📊 Quota Fair: <b>@${Number(snap.fairOddAtTrigger).toFixed(2)}</b> • Min Betfair: <b>@${Number(snap.minBetfairOdd).toFixed(2)}</b>`,
+        `📈 Telemetria: ${snap.statsAtTrigger}`,
+        `🔗 Pre-Match: ${snap.preMatchConvergence}`,
+        '',
+        '🔗 <a href="https://salvo061978.github.io/apex-edge-betting/">Apri Betfair & Dettaglio Live</a>'
+      ].join('\n');
+      await sendTelegramMessage(msg, cfg);
+    }
+
+    async function sendTelegramLiveResultAlert(item) {
+      const cfg = getTelegramLocalConfig();
+      if (!cfg.enabled || !cfg.notifyResults || !cfg.botToken || !cfg.chatId) return;
+      const icon = item.outcome === 'WON' ? '✅ PRESA' : '❌ PERSA';
+      const msg = [
+        `${icon} • <b>VERIFICA LIVE FT</b>`,
+        `⚽ <b>${item.match}</b>`,
+        `🎯 Segnale (${item.triggerMinute} su ${item.scoreAtTrigger}): <b>${item.selection}</b> @${Number(item.matchedBetfairOdd || item.minBetfairOdd).toFixed(2)}`,
+        `🏁 Risultato Finale: <b>${item.finalScore}</b>`,
+        `📝 ${item.resolutionNote}`
+      ].join('\n');
+      await sendTelegramMessage(msg, cfg);
     }
 
     function navigateToPage(page, matchId = null, skipScroll = false) {
@@ -2867,6 +3035,7 @@
       };
       LIVE_SIGNALS_HISTORY.unshift(newSnap);
       saveUiState();
+      sendTelegramLiveEntryAlert(newSnap, m);
     }
 
     /**
@@ -2907,6 +3076,7 @@
               item.resolutionNote = `❌ Nessun gol aggiuntivo dal ${item.triggerMinute} (rimasta ${item.finalScore}).`;
             }
             updated = true;
+            sendTelegramLiveResultAlert(item);
           }
         }
       }

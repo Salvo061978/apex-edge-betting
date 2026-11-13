@@ -1503,14 +1503,20 @@
     // Gestione Cassaforte Locale Betfair (Salvata ESCLUSIVAMENTE nel browser dell'utente, 0% su GitHub)
     function toggleBetfairVaultPanel() {
       const p = document.getElementById('betfair-vault-panel');
-      if (p) p.classList.toggle('hidden');
+      if (p) {
+        p.classList.toggle('hidden');
+        if (!p.classList.contains('hidden')) loadBetfairLocalVault();
+      }
     }
 
     function getTelegramLocalConfig() {
+      let parsed = null;
       try {
         const raw = localStorage.getItem(TELEGRAM_LOCAL_VAULT_KEY);
-        if (!raw) return { botToken: '', chatId: '', threadId: '', enabled: true, notifyResults: true };
-        const parsed = JSON.parse(raw);
+        if (raw) parsed = JSON.parse(raw);
+      } catch (_) {}
+      if (!parsed && window._apexTelegramMemCfg) parsed = window._apexTelegramMemCfg;
+      if (parsed && (parsed.botToken || parsed.chatId)) {
         return {
           botToken: String(parsed.botToken || '').trim(),
           chatId: String(parsed.chatId || '').trim(),
@@ -1518,9 +1524,14 @@
           enabled: parsed.enabled !== false,
           notifyResults: parsed.notifyResults !== false
         };
-      } catch (_) {
-        return { botToken: '', chatId: '', threadId: '', enabled: true, notifyResults: true };
       }
+      // Fallback: leggi direttamente gli input se compilati nella pagina corrente
+      const domTok = document.getElementById('tg-local-token')?.value.trim() || '';
+      const domChat = document.getElementById('tg-local-chatid')?.value.trim() || '';
+      const domThread = document.getElementById('tg-local-threadid')?.value.trim() || '';
+      const domEn = document.getElementById('tg-local-enabled')?.checked !== false;
+      const domRes = document.getElementById('tg-local-results')?.checked !== false;
+      return { botToken: domTok, chatId: domChat, threadId: domThread, enabled: domEn, notifyResults: domRes };
     }
 
     function updateTelegramVaultBadge(cfg) {
@@ -1569,46 +1580,54 @@
     }
 
     function saveBetfairLocalVault() {
+      const appKey = document.getElementById('bf-local-appkey')?.value.trim() || '';
+      const ssoid = document.getElementById('bf-local-ssoid')?.value.trim() || '';
+      const bridgeUrl = document.getElementById('bf-local-bridge')?.value.trim() || 'http://127.0.0.1:8787/placeOrder';
+      const botToken = document.getElementById('tg-local-token')?.value.trim() || '';
+      const chatId = document.getElementById('tg-local-chatid')?.value.trim() || '';
+      const threadId = document.getElementById('tg-local-threadid')?.value.trim() || '';
+      const enabled = document.getElementById('tg-local-enabled')?.checked !== false;
+      const notifyResults = document.getElementById('tg-local-results')?.checked !== false;
+      const tgCfg = { botToken, chatId, threadId, enabled, notifyResults, savedAt: new Date().toISOString() };
+
+      window._apexTelegramMemCfg = tgCfg;
+      updateTelegramVaultBadge(tgCfg);
+
+      const st = document.getElementById('bf-vault-status');
       try {
-        const appKey = document.getElementById('bf-local-appkey')?.value.trim() || '';
-        const ssoid = document.getElementById('bf-local-ssoid')?.value.trim() || '';
-        const bridgeUrl = document.getElementById('bf-local-bridge')?.value.trim() || 'http://127.0.0.1:8787/placeOrder';
         localStorage.setItem(BETFAIR_LOCAL_VAULT_KEY, JSON.stringify({ appKey, ssoid, bridgeUrl, savedAt: new Date().toISOString() }));
-
-        const botToken = document.getElementById('tg-local-token')?.value.trim() || '';
-        const chatId = document.getElementById('tg-local-chatid')?.value.trim() || '';
-        const threadId = document.getElementById('tg-local-threadid')?.value.trim() || '';
-        const enabled = document.getElementById('tg-local-enabled')?.checked !== false;
-        const notifyResults = document.getElementById('tg-local-results')?.checked !== false;
-        const tgCfg = { botToken, chatId, threadId, enabled, notifyResults, savedAt: new Date().toISOString() };
         localStorage.setItem(TELEGRAM_LOCAL_VAULT_KEY, JSON.stringify(tgCfg));
-        updateTelegramVaultBadge(tgCfg);
-
-        const st = document.getElementById('bf-vault-status');
         if (st) {
-          st.textContent = '✅ Salvato nella memoria privata di questo dispositivo! Nessun dato viene mai inviato a GitHub.';
+          st.textContent = (botToken && chatId)
+            ? '✅ Salvato nella memoria privata di questo dispositivo! Nessun dato viene mai inviato a GitHub.'
+            : '⚠️ Dati Betfair salvati, ma mancano Bot Token o Chat ID per Telegram.';
         }
-      } catch (_) {}
+      } catch (err) {
+        if (st) {
+          st.textContent = '⚠️ Browser in modalità privata o storage bloccato: attivo solo per questa sessione (non verrà ricordato dopo il refresh).';
+        }
+      }
     }
 
     function clearBetfairLocalVault() {
+      window._apexTelegramMemCfg = null;
       try {
         localStorage.removeItem(BETFAIR_LOCAL_VAULT_KEY);
         localStorage.removeItem(TELEGRAM_LOCAL_VAULT_KEY);
-        const ak = document.getElementById('bf-local-appkey');
-        const ss = document.getElementById('bf-local-ssoid');
-        const tgTok = document.getElementById('tg-local-token');
-        const tgChat = document.getElementById('tg-local-chatid');
-        const tgThread = document.getElementById('tg-local-threadid');
-        const st = document.getElementById('bf-vault-status');
-        if (ak) ak.value = '';
-        if (ss) ss.value = '';
-        if (tgTok) tgTok.value = '';
-        if (tgChat) tgChat.value = '';
-        if (tgThread) tgThread.value = '';
-        updateTelegramVaultBadge({ botToken: '', chatId: '', enabled: false });
-        if (st) st.textContent = '🗑️ Credenziali locali Betfair e Telegram rimosse da questo dispositivo.';
       } catch (_) {}
+      const ak = document.getElementById('bf-local-appkey');
+      const ss = document.getElementById('bf-local-ssoid');
+      const tgTok = document.getElementById('tg-local-token');
+      const tgChat = document.getElementById('tg-local-chatid');
+      const tgThread = document.getElementById('tg-local-threadid');
+      const st = document.getElementById('bf-vault-status');
+      if (ak) ak.value = '';
+      if (ss) ss.value = '';
+      if (tgTok) tgTok.value = '';
+      if (tgChat) tgChat.value = '';
+      if (tgThread) tgThread.value = '';
+      updateTelegramVaultBadge({ botToken: '', chatId: '', enabled: false });
+      if (st) st.textContent = '🗑️ Credenziali locali Betfair e Telegram rimosse da questo dispositivo.';
     }
 
     async function sendTelegramMessage(htmlText, overrideCfg = null) {

@@ -3349,9 +3349,40 @@
       }
     }
 
+    const IT_EN_TEAM_MAP = {
+      olanda: 'netherlands', paesibassi: 'netherlands', grecia: 'greece', germania: 'germany',
+      svizzera: 'switzerland', norvegia: 'norway', galles: 'wales', turchia: 'turkey',
+      turkiye: 'turkey', belgio: 'belgium', italia: 'italy', spagna: 'spain',
+      francia: 'france', inghilterra: 'england', croazia: 'croatia', svezia: 'sweden',
+      bosnia: 'bosniaandherzegovina', bosniaerzegovina: 'bosniaandherzegovina',
+      scozia: 'scotland', portogallo: 'portugal', polonia: 'poland', danimarca: 'denmark',
+      ungheria: 'hungary', repceca: 'czechia', repubblicaceca: 'czechia', czechrepublic: 'czechia',
+      finlandia: 'finland', lettonia: 'latvia', lituania: 'lithuania', cipro: 'cyprus',
+      irlanda: 'ireland', irlandadelnord: 'northernireland', ucraina: 'ukraine',
+      romania: 'romania', bulgaria: 'bulgaria', slovacchia: 'slovakia',
+      austria: 'austria', serbia: 'serbia', slovenia: 'slovenia', albania: 'albania',
+      armenia: 'armenia', montenegro: 'montenegro', islanda: 'iceland',
+      brasile: 'brazil', statiuniti: 'usa', messico: 'mexico', giappone: 'japan',
+      coreadelsud: 'southkorea', marocco: 'morocco', egitto: 'egypt'
+    };
+
+    function normalizeTeamName(s) {
+      const clean = String(s || '')
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '');
+      return IT_EN_TEAM_MAP[clean] || clean;
+    }
+
+    function teamNamesMatch(a, b) {
+      const na = normalizeTeamName(a);
+      const nb = normalizeTeamName(b);
+      if (!na || !nb) return false;
+      return na === nb || na.includes(nb) || nb.includes(na);
+    }
+
     function autoGradePalinsestoFromLiveFeed(events) {
       if (!Array.isArray(events) || events.length === 0) return;
-      const normalize = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
       let changed = false;
 
       for (const ev of events) {
@@ -3362,18 +3393,16 @@
         const competitors = comp.competitors || [];
         const homeComp = competitors.find(c => c.homeAway === 'home') || competitors[0] || {};
         const awayComp = competitors.find(c => c.homeAway === 'away') || competitors[1] || {};
-        const hName = normalize(homeComp.team?.shortDisplayName || homeComp.team?.displayName);
-        const aName = normalize(awayComp.team?.shortDisplayName || awayComp.team?.displayName);
-        if (!hName || !aName) continue;
+        const hRaw = homeComp.team?.shortDisplayName || homeComp.team?.displayName;
+        const aRaw = awayComp.team?.shortDisplayName || awayComp.team?.displayName;
+        if (!hRaw || !aRaw) continue;
 
         const hScore = parseInt(homeComp.score || '0', 10) || 0;
         const aScore = parseInt(awayComp.score || '0', 10) || 0;
 
         for (const g of PREMATCH_GAMES) {
           if (g.status === 'FT') continue;
-          const gh = normalize(g.home);
-          const ga = normalize(g.away);
-          if ((gh.includes(hName) || hName.includes(gh)) && (ga.includes(aName) || aName.includes(ga))) {
+          if (teamNamesMatch(g.home, hRaw) && teamNamesMatch(g.away, aRaw)) {
             g.finalScore = `${hScore} - ${aScore}`;
             if (state === 'in') {
               g.status = 'LIVE';
@@ -3393,7 +3422,11 @@
               else if (sel.includes('x2') && sel.includes('over 1.5')) g.outcome = (aScore >= hScore && tot >= 2) ? 'WON' : 'LOST';
               else if (sel.includes('1 + over 1.5')) g.outcome = (hScore > aScore && tot >= 2) ? 'WON' : 'LOST';
               else if (sel.includes('1 + under 3.5')) g.outcome = (hScore > aScore && tot <= 3) ? 'WON' : 'LOST';
-              else if (sel.includes('-1.5')) g.outcome = ((hScore - aScore) >= 2 || (aScore - hScore) >= 2) ? 'WON' : 'LOST';
+              else if (sel.includes('-1.5')) {
+                const awayHandicap = teamNamesMatch(g.away, sel.split('-1.5')[0].trim()) || sel.includes(normalizeTeamName(g.away));
+                g.outcome = awayHandicap ? ((aScore - hScore) >= 2 ? 'WON' : 'LOST') : ((hScore - aScore) >= 2 ? 'WON' : 'LOST');
+              }
+              else if (sel.includes('segna +') && sel.includes('1')) g.outcome = (hScore > aScore && hScore >= 1) ? 'WON' : 'LOST';
               else if (sel.startsWith('2 ')) g.outcome = aScore > hScore ? 'WON' : 'LOST';
               else if (sel.startsWith('1 ')) g.outcome = hScore > aScore ? 'WON' : 'LOST';
               changed = true;
@@ -3412,13 +3445,22 @@
       _palinsestoLastSync[isoDate] = now;
 
       const compact = isoDate.replace(/-/g, '');
-      const normalize = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
       try {
-        const res = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates=${compact}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        const events = data.events || [];
+        const urls = [
+          `https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates=${compact}`,
+          `https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.nations/scoreboard?dates=${compact}`
+        ];
+        const responses = await Promise.allSettled(urls.map(u => fetch(u).then(r => r.ok ? r.json() : null)));
+        const eventMap = new Map();
+        for (const r of responses) {
+          if (r.status === 'fulfilled' && r.value && Array.isArray(r.value.events)) {
+            for (const ev of r.value.events) {
+              if (ev && ev.id && !eventMap.has(ev.id)) eventMap.set(ev.id, ev);
+            }
+          }
+        }
+        const events = Array.from(eventMap.values());
         if (events.length === 0) return;
 
         // 1) Aggiorna eventuali match già esistenti (LIVE e FT)
@@ -3439,13 +3481,9 @@
           const awayName = awayComp.team?.shortDisplayName || awayComp.team?.displayName;
           if (!homeName || !awayName) continue;
 
-          const hNorm = normalize(homeName);
-          const aNorm = normalize(awayName);
           const already = PREMATCH_GAMES.find(g => {
             if (g.id === `espn-${ev.id}`) return true;
-            const gh = normalize(g.home);
-            const ga = normalize(g.away);
-            return ((gh.includes(hNorm) || hNorm.includes(gh)) && (ga.includes(aNorm) || aNorm.includes(ga)) && inferGameIsoDate(g) === isoDate);
+            return teamNamesMatch(g.home, homeName) && teamNamesMatch(g.away, awayName) && inferGameIsoDate(g) === isoDate;
           });
 
           const state = comp.status?.type?.state || ev.status?.type?.state;

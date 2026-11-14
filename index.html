@@ -1662,10 +1662,17 @@
       const cfg = getTelegramLocalConfig();
       const st = document.getElementById('bf-vault-status');
       if (!cfg.botToken || !cfg.chatId) {
-        if (st) st.textContent = '⚠️ Inserisci prima Telegram Bot Token e Chat ID locali.';
+        const msgWarn = '⚠️ Token o Chat ID non presenti su questo dispositivo (il salvataggio è locale per sicurezza, non condiviso tra PC e smartphone). Reinseriscili qui e riprova.';
+        if (st) {
+          st.className = 'text-[11px] font-mono font-bold text-[var(--warning)]';
+          st.textContent = msgWarn;
+        }
         return;
       }
-      if (st) st.textContent = '⏳ Invio messaggio di test su Telegram in corso...';
+      if (st) {
+        st.className = 'text-[11px] font-mono text-[var(--muted-foreground)]';
+        st.textContent = '⏳ Invio messaggio di test su Telegram in corso...';
+      }
       const msg = [
         '🟢🔥 <b>APEX EDGE • TEST NOTIFICA TELEGRAM</b>',
         '',
@@ -1676,8 +1683,9 @@
       ].join('\n');
       const r = await sendTelegramMessage(msg, cfg);
       if (st) {
+        st.className = r.ok ? 'text-[11px] font-mono font-bold text-[var(--success)]' : 'text-[11px] font-mono font-bold text-[var(--error)]';
         st.textContent = r.ok
-          ? '✅ Messaggio di test inviato su Telegram! Controlla il tuo smartphone.'
+          ? '✅ Messaggio di test inviato su Telegram! Controlla la tua chat/gruppo.'
           : `❌ Errore Telegram: ${r.error}`;
       }
     }
@@ -3303,7 +3311,7 @@
       const appmBoost = Math.max(0, ((s.appmHome + s.appmAway) - 1.6) * 0.012);
       const preMatchBoost = preMatchInfo.matched ? 0.06 : 0;
 
-      const LIVE_MIN_OPERATIONAL_ODD = 1.60;
+      const LIVE_MIN_OPERATIONAL_ODD = preMatchInfo.matched ? 1.50 : 1.60;
       const lambdaRemTotal = Math.max(0.22, ((baseXgRate * 0.45 + recentXgRate * 0.55) + sibFactor * 0.2 + appmBoost) * remMins + preMatchBoost);
       const probNextGoal = Math.min(0.78, Math.max(0.18, 1 - Math.exp(-lambdaRemTotal)));
       const fairOddOver = +(1 / probNextGoal).toFixed(2);
@@ -3314,7 +3322,7 @@
         semaphore.status = 'PREPARE';
         semaphore.badgeText = `🟡⏳ ATTENDI QUOTA ≥ @${LIVE_MIN_OPERATIONAL_ODD.toFixed(2)} (Score ${semaphore.score}/100)`;
         semaphore.badgeClass = 'bg-[var(--warning)]/20 text-[var(--warning)] border-[var(--warning)]';
-        semaphore.actionAdvice = `Telemetria forte (${semaphore.score}/100), ma la quota attuale (@${minBetfairOver.toFixed(2)}) è sotto la soglia minima operativa (@${LIVE_MIN_OPERATIONAL_ODD.toFixed(2)}). Attendi che la quota salga su Betfair prima di entrare.`;
+        semaphore.actionAdvice = `Telemetria forte (${semaphore.score}/100), ma la quota attuale (@${minBetfairOver.toFixed(2)}) è sotto la soglia minima dinamica (@${LIVE_MIN_OPERATIONAL_ODD.toFixed(2)}). Attendi che la quota salga su Betfair prima di entrare.`;
       }
 
       const signals = [];
@@ -3330,7 +3338,7 @@
         minOperationalOdd: LIVE_MIN_OPERATIONAL_ODD,
         liveOdd: betfairCustomOdds[sigOverId] || defaultBetfairOver,
         confidence: Math.min(9.8, +(6.8 + lambdaRemTotal * 2.1).toFixed(1)),
-        triggerReason: `λ Residuo = ${lambdaRemTotal.toFixed(2)} gol attesi nei ${remMins}' finali • Deficit xG ${semaphore.xgDeficit >= 0 ? '+' : ''}${semaphore.xgDeficit} • Tiri in Area ${s.shotsInsideBoxHome}-${s.shotsInsideBoxAway} • Tiri in Porta ${s.shotsOnTargetHome}-${s.shotsOnTargetAway}.`,
+        triggerReason: `λ Residuo = ${lambdaRemTotal.toFixed(2)} gol attesi nei ${remMins}' finali • Deficit xG ${semaphore.xgDeficit >= 0 ? '+' : ''}${semaphore.xgDeficit} • Soglia Dinamica ≥ @${LIVE_MIN_OPERATIONAL_ODD.toFixed(2)}.`,
         urgency: semaphore.status === 'ENTER_NOW'
           ? '🟢🔥 ENTRA ORA SU BETFAIR'
           : minBetfairOver < LIVE_MIN_OPERATIONAL_ODD
@@ -3339,6 +3347,33 @@
               ? '🟡 PREPARA MERCATO'
               : '⚪ ATTENDI (NO-BET)'
       });
+
+      const totalXgNow = s.xgHome + s.xgAway;
+      const totalSotNow = s.shotsOnTargetHome + s.shotsOnTargetAway;
+      const totalLast15Xg = s.xgLast15Home + s.xgLast15Away;
+
+      // Strategia 2: OVER 0.5 PRIMO TEMPO (finestra 20'-38' sullo 0-0 con ritmo alto)
+      if (min >= 20 && min <= 38 && totalGoals === 0 && totalXgNow >= 0.55 && totalSotNow >= 2) {
+        const rem1H = Math.max(4, 46 - min);
+        const lambda1H = Math.max(0.28, (baseXgRate * 0.5 + recentXgRate * 0.5) * rem1H);
+        const prob1H = Math.min(0.72, Math.max(0.28, 1 - Math.exp(-lambda1H)));
+        const fair1H = +(1 / prob1H).toFixed(2);
+        const minBf1H = calcMinBetfairBackOdd(fair1H, 0.05);
+        const sig1HId = `sig-1h-${m.id}`;
+        signals.push({
+          id: sig1HId,
+          signalType: `STRATEGIA 1° TEMPO • OVER 0.5 1°T`,
+          selection: `Over 0.5 Gol 1° Tempo (Gol entro il 45')`,
+          market: 'Over/Under 1° Tempo',
+          fairOdd: fair1H,
+          minBetfairOdd: minBf1H,
+          minOperationalOdd: LIVE_MIN_OPERATIONAL_ODD,
+          liveOdd: betfairCustomOdds[sig1HId] || Math.max(minBf1H, LIVE_MIN_OPERATIONAL_ODD),
+          confidence: 8.6,
+          triggerReason: `0-0 al ${min}' con ${totalXgNow.toFixed(2)} xG e ${totalSotNow} tiri in porta: finestra ideale per gol prima dell'intervallo.`,
+          urgency: minBf1H >= LIVE_MIN_OPERATIONAL_ODD && semaphore.score >= 60 ? '🟢🔥 FINESTRA 1°T ATTIVA' : '🟡 MONITORA 1°T'
+        });
+      }
 
       const homeShare = (s.xgHome + s.appmHome * 0.5) / Math.max(0.2, (s.xgHome + s.xgAway + (s.appmHome + s.appmAway) * 0.5));
       const domTeam = homeShare >= 0.55 ? m.home : (homeShare <= 0.45 ? m.away : null);
@@ -3351,9 +3386,9 @@
 
         signals.push({
           id: sigNextId,
-          signalType: `DOMINIO TERRITORIALE • ${domTeam.toUpperCase()}`,
-          selection: `Prossimo Gol: ${domTeam} (o ${domTeam} DNB Live)`,
-          market: 'Prossimo Gol / Esito Live',
+          signalType: `DOMINIO & DNB LIVE • ${domTeam.toUpperCase()}`,
+          selection: `${domTeam} Prossimo Gol o ${domTeam} DNB (0.0 Live)`,
+          market: 'Prossimo Gol / Asian DNB Live',
           fairOdd: fairTeamNext,
           minBetfairOdd: minBetfairTeam,
           minOperationalOdd: LIVE_MIN_OPERATIONAL_ODD,
@@ -3362,10 +3397,54 @@
           triggerReason: `${domTeam} genera il ${Math.round(domShare * 100)}% della pressione offensiva live (xG ${s.xgHome.toFixed(2)}-${s.xgAway.toFixed(2)}, Tiri in Porta ${s.shotsOnTargetHome}-${s.shotsOnTargetAway}).`,
           urgency: semaphore.status === 'ENTER_NOW' && minBetfairTeam >= LIVE_MIN_OPERATIONAL_ODD ? '🟢🔥 ASSEDIO ATTIVO' : '🟡 MONITORA DOMINIO'
         });
+
+        // Strategia 3: LAY THE DRAW (Banca il Pareggio) con Cash-Out al gol
+        if (min >= 50 && min <= 78 && m.scoreHome === m.scoreAway && domShare >= 0.60) {
+          const probBreakDraw = Math.min(0.74, Math.max(0.32, probNextGoal * 0.92));
+          const fairLtd = +(1 / probBreakDraw).toFixed(2);
+          const minBfLtd = calcMinBetfairBackOdd(fairLtd, 0.05);
+          const sigLtdId = `sig-ltd-${m.id}`;
+          signals.push({
+            id: sigLtdId,
+            signalType: `EXCHANGE • LAY THE DRAW (BANCA X)`,
+            selection: `Banca Pareggio (${m.scoreHome}-${m.scoreAway}) + Cash-Out al gol`,
+            market: 'Esito Finale (Banca X)',
+            fairOdd: fairLtd,
+            minBetfairOdd: minBfLtd,
+            minOperationalOdd: LIVE_MIN_OPERATIONAL_ODD,
+            liveOdd: betfairCustomOdds[sigLtdId] || Math.max(minBfLtd, LIVE_MIN_OPERATIONAL_ODD),
+            confidence: 8.8,
+            triggerReason: `Parità al ${min}' ma ${domTeam} domina al ${Math.round(domShare * 100)}%: al primo gol fai green-up immediato su Betfair.`,
+            urgency: minBfLtd >= LIVE_MIN_OPERATIONAL_ODD && semaphore.score >= 65 ? '🟢⚡ LTD CONSIGLIATO' : '🟡 PREPARA LTD'
+          });
+        }
+      }
+
+      // Strategia 4: UNDER TATTICO (Partita addormentata o gestione doppio vantaggio)
+      if (min >= 64 && (Math.abs(m.scoreHome - m.scoreAway) >= 2 || totalLast15Xg < 0.20) && totalSotNow <= 6) {
+        const probUnder = Math.min(0.75, Math.max(0.35, 1 - probNextGoal));
+        const fairUnder = +(1 / probUnder).toFixed(2);
+        const minBfUnder = calcMinBetfairBackOdd(fairUnder, 0.05);
+        if (minBfUnder >= LIVE_MIN_OPERATIONAL_ODD) {
+          const sigUnderId = `sig-under-${m.id}`;
+          signals.push({
+            id: sigUnderId,
+            signalType: `GESTIONE RITMO • UNDER ${overLine} GOL`,
+            selection: `Under ${overLine} Gol (Nessun altro gol fino al 90')`,
+            market: 'Under/Over Tattico Live',
+            fairOdd: fairUnder,
+            minBetfairOdd: minBfUnder,
+            minOperationalOdd: LIVE_MIN_OPERATIONAL_ODD,
+            liveOdd: betfairCustomOdds[sigUnderId] || minBfUnder,
+            confidence: 8.3,
+            triggerReason: `Ritmo in calo al ${min}' (xG ultimi 15': ${totalLast15Xg.toFixed(2)}, scarto gol: ${Math.abs(m.scoreHome - m.scoreAway)}): decadimento temporale favorevole all'Under.`,
+            urgency: '🟡 VALUTA UNDER TATTICO'
+          });
+        }
       }
 
       m.liveSignals = signals;
-      // Se il semaforo è verde (ENTRA ORA con quota >= 1.60), congela automaticamente il segnale nello Storico Live!
+      // Se il semaforo è verde (ENTRA ORA con quota >= soglia dinamica 1.50/1.60), congela automaticamente il segnale nello Storico Live!
       recordLiveSignalSnapshot(m, signals[0], semaphore, preMatchInfo);
       return signals;
     }
@@ -3438,14 +3517,20 @@
       austria: 'austria', serbia: 'serbia', slovenia: 'slovenia', albania: 'albania',
       armenia: 'armenia', montenegro: 'montenegro', islanda: 'iceland',
       brasile: 'brazil', statiuniti: 'usa', messico: 'mexico', giappone: 'japan',
-      coreadelsud: 'southkorea', marocco: 'morocco', egitto: 'egypt'
+      coreadelsud: 'southkorea', marocco: 'morocco', egitto: 'egypt',
+      manutd: 'manchesterunited', mancity: 'manchestercity', spurs: 'tottenham',
+      tottenhamhotspur: 'tottenham', psg: 'parissaintgermain', stellarossa: 'crvenazvezda',
+      redstarbelgrade: 'crvenazvezda', inter: 'internazionale', intermilan: 'internazionale',
+      bayernmonaco: 'bayernmunich', atleticomadrid: 'atleticodemadrid'
     };
 
     function normalizeTeamName(s) {
-      const clean = String(s || '')
+      const stripped = String(s || '')
         .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
         .toLowerCase()
-        .replace(/[^a-z0-9]/g, '');
+        .replace(/\b(fc|ac|sc|cf|afc|ssc|rcd)\b/g, ' ')
+        .replace(/\butd\b/g, 'united');
+      const clean = stripped.replace(/[^a-z0-9]/g, '');
       return IT_EN_TEAM_MAP[clean] || clean;
     }
 

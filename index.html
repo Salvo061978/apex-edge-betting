@@ -4173,11 +4173,29 @@
       const winRateLive = gradedTotal > 0 ? ((wonLive / gradedTotal) * 100).toFixed(1) : '0.0';
       const roiLive = totalLiveStaked > 0 ? ((totalLiveProfit / totalLiveStaked) * 100).toFixed(1) : '0.0';
 
+      const parseLiveDateKey = (lbl) => {
+        const m = String(lbl || '').match(/(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?/);
+        if (!m) return 0;
+        const dd = parseInt(m[1], 10);
+        const mm = parseInt(m[2], 10);
+        const yyyy = parseInt(m[3] || new Date().getFullYear(), 10);
+        return yyyy * 10000 + mm * 100 + dd;
+      };
+
       const filtered = enriched.filter(({ item }) => {
         if (liveHistoryFilter === 'WON') return item.outcome === 'WON';
         if (liveHistoryFilter === 'LOST') return item.outcome === 'LOST';
         if (liveHistoryFilter === 'SAVED') return item.outcome === 'SAVED' || item.triggerStatus === 'BLOCKED_NO_BET';
         return true;
+      }).sort((a, b) => {
+        const dDiff = parseLiveDateKey(b.item.dateLabel) - parseLiveDateKey(a.item.dateLabel);
+        if (dDiff !== 0) return dDiff;
+        const aPend = a.item.outcome === 'PENDING' ? 1 : 0;
+        const bPend = b.item.outcome === 'PENDING' ? 1 : 0;
+        if (bPend !== aPend) return bPend - aPend;
+        const minA = parseInt(String(a.item.triggerMinute || '0'), 10) || 0;
+        const minB = parseInt(String(b.item.triggerMinute || '0'), 10) || 0;
+        return minB - minA;
       });
 
       container.innerHTML = `

@@ -3970,33 +3970,39 @@
         return `
           <div class="bg-[var(--card)] border-2 transition-all rounded-xl overflow-hidden ${sem.status === 'ENTER_NOW' ? 'border-[var(--success)] shadow-lg' : isOpen ? 'border-[var(--primary)] shadow-lg' : 'border-[var(--border)] hover:border-[var(--primary)]/50'}">
             <!-- RIGA HEADER COMPATTO DELLA PARTITA CON SEMAFORO QUANDO SCOMMETTERE -->
-            <div onclick="toggleLiveAccordionMatch('${m.id}')" class="p-3 cursor-pointer flex flex-col md:flex-row md:items-center justify-between gap-2 select-none ${isOpen ? 'bg-[var(--secondary)]/70 border-b border-[var(--border)]' : ''}">
-              <div class="flex flex-wrap items-center gap-2 min-w-0">
-                <span class="px-2 py-0.5 rounded bg-[var(--error)]/20 text-[var(--error)] border border-[var(--error)]/40 font-mono font-bold text-xs flex items-center gap-1 shrink-0">
-                  <span class="w-1.5 h-1.5 rounded-full bg-[var(--error)] animate-live"></span>
-                  ${m.minute}'
-                </span>
-                <!-- BADGE SEMAFORO IMMEDIATO SULLA RIGA -->
-                <span class="px-2 py-0.5 rounded border font-mono font-bold text-[11px] shrink-0 ${sem.badgeClass}">
-                  ${sem.badgeText}
-                </span>
+            <div onclick="toggleLiveAccordionMatch('${m.id}')" class="p-3 cursor-pointer flex flex-col md:flex-row md:items-center justify-between gap-2.5 select-none ${isOpen ? 'bg-[var(--secondary)]/70 border-b border-[var(--border)]' : ''}">
+              <div class="space-y-1.5 min-w-0">
+                <div class="flex flex-wrap items-center gap-1.5 min-w-0">
+                  <span class="px-2 py-0.5 rounded bg-[var(--error)]/20 text-[var(--error)] border border-[var(--error)]/40 font-mono font-bold text-xs flex items-center gap-1 shrink-0">
+                    <span class="w-1.5 h-1.5 rounded-full bg-[var(--error)] animate-live"></span>
+                    ${m.minute}'
+                  </span>
+                  <!-- BADGE SEMAFORO RESPONSIVE (NESSUN TAGLIO SU MOBILE) -->
+                  <span class="px-2 py-0.5 rounded border font-mono font-bold text-[11px] leading-tight whitespace-normal break-words ${sem.badgeClass}">
+                    ${sem.badgeText}
+                  </span>
+                </div>
                 <div class="min-w-0">
-                  <div class="flex items-center gap-2">
-                    <span class="font-bold text-sm text-[var(--foreground)] truncate">${m.home}</span>
-                    <span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--primary)] font-mono font-bold text-xs text-[var(--primary)]">${m.scoreHome} - ${m.scoreAway}</span>
-                    <span class="font-bold text-sm text-[var(--foreground)] truncate">${m.away}</span>
+                  <div class="flex flex-wrap items-center gap-1.5">
+                    <span class="font-bold text-sm text-[var(--foreground)]">${m.home}</span>
+                    <span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--primary)] font-mono font-bold text-xs text-[var(--primary)] shrink-0">${m.scoreHome} - ${m.scoreAway}</span>
+                    <span class="font-bold text-sm text-[var(--foreground)]">${m.away}</span>
                   </div>
                   <div class="text-[11px] text-[var(--muted-foreground)] truncate">${m.league} ${preInfo.matched ? '• ⚡ Convergenza Pre-Match' : ''}</div>
                 </div>
               </div>
 
-              <!-- Pillole Telemetria Rapida già visibili senza aprire -->
-              <div class="flex flex-wrap items-center justify-between md:justify-end gap-1.5 text-[11px] font-mono">
-                <span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] text-[var(--success)]">xG ${s.xgHome.toFixed(2)}-${s.xgAway.toFixed(2)}</span>
-                <span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] text-[var(--foreground)]">🎯 Porta ${s.shotsOnTargetHome}-${s.shotsOnTargetAway}</span>
-                <span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] text-[var(--muted-foreground)]">📦 Area ${s.shotsInsideBoxHome}-${s.shotsInsideBoxAway}</span>
-                ${topSig ? `<span class="px-2 py-0.5 rounded bg-[var(--primary)]/20 text-[var(--primary)] font-bold">Target ≥ @${Math.max(topSig.minBetfairOdd, topSig.minOperationalOdd || 1.60).toFixed(2)}</span>` : ''}
-                <span class="px-2 py-0.5 rounded bg-[var(--secondary)] text-[var(--foreground)] font-bold">${isOpen ? '▲ Chiudi' : '▼ Apri'}</span>
+              <!-- Pillole Telemetria Rapida + Target & Apri allineati -->
+              <div class="flex flex-col md:items-end gap-1.5 text-[11px] font-mono w-full md:w-auto">
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] text-[var(--success)]">xG ${s.xgHome.toFixed(2)}-${s.xgAway.toFixed(2)}</span>
+                  <span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] text-[var(--foreground)]">🎯 Porta ${s.shotsOnTargetHome}-${s.shotsOnTargetAway}</span>
+                  <span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] text-[var(--muted-foreground)]">📦 Area ${s.shotsInsideBoxHome}-${s.shotsInsideBoxAway}</span>
+                </div>
+                <div class="flex items-center justify-between md:justify-end gap-2 w-full md:w-auto">
+                  ${topSig ? `<span class="px-2 py-0.5 rounded bg-[var(--primary)]/20 text-[var(--primary)] font-bold">Target ≥ @${Math.max(topSig.minBetfairOdd, topSig.minOperationalOdd || 1.50).toFixed(2)}</span>` : '<span></span>'}
+                  <span class="px-2.5 py-0.5 rounded bg-[var(--secondary)] text-[var(--foreground)] font-bold shrink-0">${isOpen ? '▲ Chiudi' : '▼ Apri'}</span>
+                </div>
               </div>
             </div>
 
@@ -4218,8 +4224,48 @@
             </div>
           </div>
 
-          <!-- Tabella Storico Segnali Live Congelati -->
-          <div class="overflow-x-auto">
+          <!-- Card Mobile Compatte Storico Segnali Live -->
+          <div class="md:hidden space-y-2.5">
+            ${filtered.map(({ item, stake, pnl, netOdd }) => `
+              <div class="p-3 rounded-xl bg-[var(--background)] border ${item.outcome === 'WON' ? 'border-[var(--success)]/40' : item.outcome === 'LOST' ? 'border-[var(--error)]/40' : 'border-[var(--border)]'} space-y-2 text-xs">
+                <div class="flex items-center justify-between gap-2">
+                  <span class="font-mono text-[10px] text-[var(--muted-foreground)] truncate">${item.dateLabel} • ${item.league}</span>
+                  <span class="px-2 py-0.5 rounded font-mono font-bold text-[10px] shrink-0 ${item.outcome === 'WON' ? 'bg-[var(--success)]/20 text-[var(--success)]' : item.outcome === 'SAVED' ? 'bg-[var(--warning)]/20 text-[var(--warning)]' : item.outcome === 'LOST' ? 'bg-[var(--error)]/20 text-[var(--error)]' : 'bg-[var(--secondary)] text-[var(--foreground)]'}">
+                    ${item.outcome === 'WON' ? '✅ CENTRATO (+€' + pnl + ')' : item.outcome === 'SAVED' ? '🛡️ NO-BET (€0)' : item.outcome === 'LOST' ? '❌ ERRATO (' + pnl + '€)' : '⏳ IN CORSO'}
+                  </span>
+                </div>
+
+                <div class="flex items-center justify-between gap-2">
+                  <div class="font-bold text-sm text-[var(--foreground)]">${item.match}</div>
+                  <span class="px-2 py-0.5 rounded bg-[var(--card)] border border-[var(--border)] font-mono font-bold text-xs shrink-0">FT ${item.finalScore}</span>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-1.5 font-mono text-[11px]">
+                  <span class="px-2 py-0.5 rounded font-bold ${item.triggerStatus === 'ENTER_NOW' ? 'bg-[var(--success)]/20 text-[var(--success)] border border-[var(--success)]/40' : 'bg-[var(--secondary)] text-[var(--muted-foreground)]'}">
+                    ${item.triggerStatus === 'ENTER_NOW' ? '🟢🔥 ' + item.triggerMinute : '🛑 ' + item.triggerMinute}
+                  </span>
+                  <span class="px-2 py-0.5 rounded bg-[var(--card)] border border-[var(--border)] font-bold">Sul ${item.scoreAtTrigger}</span>
+                  <span class="text-[var(--muted-foreground)]">Score ${item.triggerScore}/100</span>
+                </div>
+
+                <div class="p-2 rounded-lg bg-[var(--card)] border border-[var(--border)] space-y-1">
+                  <div class="font-bold text-[var(--foreground)]">🎯 ${item.selection}</div>
+                  <div class="font-mono text-[11px] ${item.triggerStatus === 'ENTER_NOW' ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)]'}">
+                    ${item.triggerStatus === 'ENTER_NOW'
+                      ? `Betfair Punta: <strong>@${item.matchedBetfairOdd.toFixed(2)}</strong> (Netta @${netOdd}) • Stake €${stake}`
+                      : `Quota @${item.matchedBetfairOdd.toFixed(2)} &lt; Min @${item.minBetfairOdd.toFixed(2)} (Bloccata)`}
+                  </div>
+                </div>
+
+                <div class="text-[11px] text-[var(--muted-foreground)] font-mono leading-snug">${item.statsAtTrigger}</div>
+                <div class="text-[11px] font-semibold ${item.triggerStatus === 'ENTER_NOW' ? 'text-[var(--primary)]' : 'text-[var(--warning)]'}">${item.preMatchConvergence}</div>
+                ${item.resolutionNote ? `<div class="text-[11px] text-[var(--muted-foreground)] border-t border-[var(--border)] pt-1.5">${item.resolutionNote}</div>` : ''}
+              </div>
+            `).join('')}
+          </div>
+
+          <!-- Tabella Desktop Storico Segnali Live Congelati -->
+          <div class="hidden md:block overflow-x-auto">
             <table class="w-full text-left border-collapse text-xs">
               <thead>
                 <tr class="bg-[var(--secondary)] text-[var(--muted-foreground)] border-b border-[var(--border)] font-mono uppercase">

@@ -3905,6 +3905,7 @@
       if (activeTag !== 'INPUT') {
         renderLiveAccordion();
         renderLiveSignalsHistoryPanel('live-signals-history-panel');
+        renderBetSlip();
       }
     }
 
@@ -4401,6 +4402,44 @@
       document.getElementById('betslip-sidebar').scrollIntoView({ behavior: 'smooth' });
     }
 
+    function resolveBetSlipItemStatus(item) {
+      if (!item.isLive && String(item.id || '').startsWith('pick-')) {
+        const gid = item.id.replace(/^pick-/, '');
+        const g = PREMATCH_GAMES.find(x => x.id === gid);
+        if (g) {
+          if (g.liveStatus === 'IN_PLAY' && g.liveScore) {
+            return { state: 'LIVE', badge: `🔴 ${g.liveMinute}' (${g.liveScore})`, cls: 'bg-[var(--error)]/15 text-[var(--error)] border-[var(--error)]/40' };
+          }
+          if (g.settled === 'WON') {
+            return { state: 'WON', badge: `✅ PRESA${g.finalScore ? ' • FT ' + g.finalScore : ''}`, cls: 'bg-[var(--success)]/15 text-[var(--success)] border-[var(--success)]/40' };
+          }
+          if (g.settled === 'LOST') {
+            return { state: 'LOST', badge: `❌ PERSA${g.finalScore ? ' • FT ' + g.finalScore : ''}`, cls: 'bg-[var(--error)]/15 text-[var(--error)] border-[var(--error)]/40' };
+          }
+          return { state: 'PENDING', badge: `⏳ ${g.kickoff || 'In attesa'}`, cls: 'bg-[var(--secondary)] text-[var(--muted-foreground)] border-[var(--border)]' };
+        }
+      }
+
+      const liveMatchId = String(item.id || '').replace(/^sig-(over|next|1h|ltd|under)-/, '');
+      const lm = LIVE_MATCHES.find(m => m.id === liveMatchId);
+      if (lm) {
+        return { state: 'LIVE', badge: `🔴 ${lm.minute}' (${lm.scoreHome}-${lm.scoreAway})`, cls: 'bg-[var(--error)]/15 text-[var(--error)] border-[var(--error)]/40' };
+      }
+
+      const snap = LIVE_SIGNALS_HISTORY.find(s => s.id === `snap-${liveMatchId}` || (item.matchTitle && s.match && item.matchTitle.toLowerCase().includes(s.match.toLowerCase())));
+      if (snap) {
+        if (snap.outcome === 'WON') {
+          return { state: 'WON', badge: `✅ PRESA • FT ${snap.finalScore}`, cls: 'bg-[var(--success)]/15 text-[var(--success)] border-[var(--success)]/40' };
+        }
+        if (snap.outcome === 'LOST') {
+          return { state: 'LOST', badge: `❌ PERSA • FT ${snap.finalScore}`, cls: 'bg-[var(--error)]/15 text-[var(--error)] border-[var(--error)]/40' };
+        }
+        return { state: 'PENDING', badge: `⏳ ${snap.triggerMinute} (${snap.scoreAtTrigger})`, cls: 'bg-[var(--secondary)] text-[var(--muted-foreground)] border-[var(--border)]' };
+      }
+
+      return { state: 'PENDING', badge: '⏳ In attesa', cls: 'bg-[var(--secondary)] text-[var(--muted-foreground)] border-[var(--border)]' };
+    }
+
     function renderBetSlip() {
       document.getElementById('slip-count').textContent = betSlip.length;
       const listEl = document.getElementById('slip-items');
@@ -4414,29 +4453,51 @@
 
       let totalSingleStake = 0;
       let totalExpectedProfit = 0;
+      let settledPnl = 0;
+      let settledCount = 0;
+      let wonCount = 0;
+      let lostCount = 0;
       let combinedOdd = 1;
       let combinedProb = 1;
 
       listEl.innerHTML = betSlip.map(item => {
         const kelly = calculateKellyStake(item.odd, item.prob);
+        const st = resolveBetSlipItemStatus(item);
         totalSingleStake += kelly.euro;
         totalExpectedProfit += kelly.euro * (item.ev / 100);
         combinedOdd *= item.odd;
         combinedProb *= (item.prob / 100);
 
+        let itemPnlHtml = `<span class="text-[var(--success)]">+${item.ev.toFixed(1)}% EV</span>`;
+        if (st.state === 'WON') {
+          const winNet = Math.round(kelly.euro * (item.odd - 1));
+          settledPnl += winNet;
+          settledCount++;
+          wonCount++;
+          itemPnlHtml = `<span class="text-[var(--success)] font-bold">+€${winNet} Reale</span>`;
+        } else if (st.state === 'LOST') {
+          settledPnl -= kelly.euro;
+          settledCount++;
+          lostCount++;
+          itemPnlHtml = `<span class="text-[var(--error)] font-bold">-€${kelly.euro} Reale</span>`;
+        }
+
         return `
-          <div class="p-2.5 rounded-lg bg-[var(--background)] border border-[var(--border)] space-y-1 text-xs">
-            <div class="flex items-center justify-between">
+          <div class="p-2.5 rounded-lg bg-[var(--background)] border ${st.state === 'WON' ? 'border-[var(--success)]/50' : st.state === 'LOST' ? 'border-[var(--error)]/50' : 'border-[var(--border)]'} space-y-1.5 text-xs">
+            <div class="flex items-center justify-between gap-2">
               <span class="font-semibold text-[var(--muted-foreground)] truncate">${item.isLive ? '⚡ ' : '📊 '}${item.matchTitle}</span>
-              <button onclick="toggleSlipItem('${item.id}')" class="text-[var(--muted-foreground)] hover:text-[var(--error)] font-bold">✕</button>
+              <button onclick="toggleSlipItem('${item.id}')" class="text-[var(--muted-foreground)] hover:text-[var(--error)] font-bold shrink-0">✕</button>
             </div>
-            <div class="flex items-center justify-between">
-              <span class="font-bold">${item.selection}</span>
-              <span class="font-mono font-bold text-[var(--primary)]">@${item.odd.toFixed(2)}</span>
+            <div class="flex items-center justify-between gap-2">
+              <span class="font-bold text-[var(--foreground)]">${item.selection}</span>
+              <span class="font-mono font-bold text-[var(--primary)] shrink-0">@${item.odd.toFixed(2)}</span>
             </div>
-            <div class="flex items-center justify-between font-mono text-xs">
-              <span class="text-[var(--success)]">+${item.ev.toFixed(1)}% EV</span>
-              <span>Stake Kelly: <strong>€${kelly.euro}</strong></span>
+            <div class="flex flex-wrap items-center justify-between gap-1.5 font-mono text-[11px] pt-0.5">
+              <span class="px-2 py-0.5 rounded border font-bold ${st.cls}">${st.badge}</span>
+              <div class="flex items-center gap-2">
+                ${itemPnlHtml}
+                <span class="text-[var(--muted-foreground)]">Stake: <strong class="text-[var(--foreground)]">€${kelly.euro}</strong></span>
+              </div>
             </div>
           </div>
         `;
@@ -4446,15 +4507,22 @@
         sumEl.innerHTML = `
           <div class="flex justify-between"><span>Totale Stake Singole:</span><span class="font-mono font-bold">€${totalSingleStake}</span></div>
           <div class="flex justify-between"><span>Profitto Atteso (+EV):</span><span class="font-mono font-bold text-[var(--success)]">+€${totalExpectedProfit.toFixed(2)}</span></div>
+          ${settledCount > 0 ? `<div class="flex justify-between pt-1 border-t border-[var(--border)]"><span>Esito Reale (${wonCount}V - ${lostCount}P):</span><span class="font-mono font-bold ${settledPnl >= 0 ? 'text-[var(--success)]' : 'text-[var(--error)]'}">${settledPnl >= 0 ? '+€' + settledPnl : '-€' + Math.abs(settledPnl)}</span></div>` : ''}
         `;
       } else {
         const multiProbPct = combinedProb * 100;
         const multiKelly = calculateKellyStake(combinedOdd, multiProbPct);
         const stake = Math.max(10, multiKelly.euro);
+        const multiStatus = lostCount > 0
+          ? `<span class="text-[var(--error)] font-bold">❌ PERSA (-€${stake})</span>`
+          : wonCount === betSlip.length && betSlip.length > 0
+            ? `<span class="text-[var(--success)] font-bold">✅ VINTA (+€${Math.round(stake * (combinedOdd - 1))})</span>`
+            : `<span class="text-[var(--warning)] font-bold">⏳ IN CORSO (${wonCount}/${betSlip.length} ✅)</span>`;
         sumEl.innerHTML = `
           <div class="flex justify-between"><span>Quota Multipla:</span><span class="font-mono font-bold text-[var(--primary)]">@${combinedOdd.toFixed(2)}</span></div>
           <div class="flex justify-between"><span>Stake Consigliato:</span><span class="font-mono font-bold">€${stake}</span></div>
           <div class="flex justify-between font-bold"><span>Vincita Potenziale:</span><span class="font-mono text-[var(--success)]">€${(stake * combinedOdd).toFixed(2)}</span></div>
+          <div class="flex justify-between pt-1 border-t border-[var(--border)]"><span>Stato Multipla:</span><span class="font-mono">${multiStatus}</span></div>
         `;
       }
     }

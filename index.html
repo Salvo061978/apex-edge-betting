@@ -3056,20 +3056,15 @@
      * il segnale di DOPPIA CONFERMA (Pre-Match + Statistiche Live).
      */
     function findPreMatchConvergence(m) {
-      const normalize = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-      const lh = normalize(m.home);
-      const la = normalize(m.away);
       for (const g of PREMATCH_GAMES) {
-        const gh = normalize(g.home);
-        const ga = normalize(g.away);
-        if (lh && la && ((gh.includes(lh) || lh.includes(gh)) && (ga.includes(la) || la.includes(ga)))) {
+        if (teamNamesMatch(g.home, m.home) && teamNamesMatch(g.away, m.away)) {
           return {
             matched: true,
             preGameId: g.id,
             preSelection: g.mainPick.selection,
             preEv: g.mainPick.evPercent,
             projTotalXg: +(Number(g.xgStats.projectedHomeGoals) + Number(g.xgStats.projectedAwayGoals)).toFixed(2),
-            label: `⚡ CONVERGENZA PRE-MATCH + LIVE: Già Top Pick Pre-Match (${g.mainPick.selection} @${g.mainPick.bookieOdd.toFixed(2)}, +${g.mainPick.evPercent.toFixed(1)}% EV)`
+            label: `⚡ CONVERGENZA PRE-MATCH + LIVE: ${g.mainPick.selection} (@${g.mainPick.bookieOdd.toFixed(2)}, +${g.mainPick.evPercent.toFixed(1)}% EV)`
           };
         }
       }
@@ -3308,11 +3303,19 @@
       const appmBoost = Math.max(0, ((s.appmHome + s.appmAway) - 1.6) * 0.012);
       const preMatchBoost = preMatchInfo.matched ? 0.06 : 0;
 
+      const LIVE_MIN_OPERATIONAL_ODD = 1.60;
       const lambdaRemTotal = Math.max(0.22, ((baseXgRate * 0.45 + recentXgRate * 0.55) + sibFactor * 0.2 + appmBoost) * remMins + preMatchBoost);
-      const probNextGoal = Math.min(0.92, Math.max(0.18, 1 - Math.exp(-lambdaRemTotal)));
+      const probNextGoal = Math.min(0.78, Math.max(0.18, 1 - Math.exp(-lambdaRemTotal)));
       const fairOddOver = +(1 / probNextGoal).toFixed(2);
       const minBetfairOver = calcMinBetfairBackOdd(fairOddOver, 0.05);
-      const defaultBetfairOver = m.feedLiveOddOver || minBetfairOver;
+      const defaultBetfairOver = m.feedLiveOddOver || Math.max(minBetfairOver, LIVE_MIN_OPERATIONAL_ODD);
+
+      if (minBetfairOver < LIVE_MIN_OPERATIONAL_ODD && semaphore.status === 'ENTER_NOW') {
+        semaphore.status = 'PREPARE';
+        semaphore.badgeText = `🟡⏳ ATTENDI QUOTA ≥ @${LIVE_MIN_OPERATIONAL_ODD.toFixed(2)} (Score ${semaphore.score}/100)`;
+        semaphore.badgeClass = 'bg-[var(--warning)]/20 text-[var(--warning)] border-[var(--warning)]';
+        semaphore.actionAdvice = `Telemetria forte (${semaphore.score}/100), ma la quota attuale (@${minBetfairOver.toFixed(2)}) è sotto la soglia minima operativa (@${LIVE_MIN_OPERATIONAL_ODD.toFixed(2)}). Attendi che la quota salga su Betfair prima di entrare.`;
+      }
 
       const signals = [];
       const overLine = (totalGoals + 0.5).toFixed(1);
@@ -3324,17 +3327,24 @@
         market: `Somma Gol Live (Attuale: ${m.scoreHome}-${m.scoreAway})`,
         fairOdd: fairOddOver,
         minBetfairOdd: minBetfairOver,
+        minOperationalOdd: LIVE_MIN_OPERATIONAL_ODD,
         liveOdd: betfairCustomOdds[sigOverId] || defaultBetfairOver,
         confidence: Math.min(9.8, +(6.8 + lambdaRemTotal * 2.1).toFixed(1)),
         triggerReason: `λ Residuo = ${lambdaRemTotal.toFixed(2)} gol attesi nei ${remMins}' finali • Deficit xG ${semaphore.xgDeficit >= 0 ? '+' : ''}${semaphore.xgDeficit} • Tiri in Area ${s.shotsInsideBoxHome}-${s.shotsInsideBoxAway} • Tiri in Porta ${s.shotsOnTargetHome}-${s.shotsOnTargetAway}.`,
-        urgency: semaphore.status === 'ENTER_NOW' ? '🟢🔥 ENTRA ORA SU BETFAIR' : semaphore.status === 'PREPARE' ? '🟡 PREPARA MERCATO' : '⚪ ATTENDI (NO-BET)'
+        urgency: semaphore.status === 'ENTER_NOW'
+          ? '🟢🔥 ENTRA ORA SU BETFAIR'
+          : minBetfairOver < LIVE_MIN_OPERATIONAL_ODD
+            ? `🟡 ATTENDI QUOTA ≥ @${LIVE_MIN_OPERATIONAL_ODD.toFixed(2)}`
+            : semaphore.status === 'PREPARE'
+              ? '🟡 PREPARA MERCATO'
+              : '⚪ ATTENDI (NO-BET)'
       });
 
       const homeShare = (s.xgHome + s.appmHome * 0.5) / Math.max(0.2, (s.xgHome + s.xgAway + (s.appmHome + s.appmAway) * 0.5));
       const domTeam = homeShare >= 0.55 ? m.home : (homeShare <= 0.45 ? m.away : null);
       if (domTeam) {
         const domShare = homeShare >= 0.55 ? homeShare : (1 - homeShare);
-        const probTeamNext = Math.min(0.84, Math.max(0.25, probNextGoal * domShare * 1.08));
+        const probTeamNext = Math.min(0.76, Math.max(0.25, probNextGoal * domShare * 1.08));
         const fairTeamNext = +(1 / probTeamNext).toFixed(2);
         const minBetfairTeam = calcMinBetfairBackOdd(fairTeamNext, 0.05);
         const sigNextId = `sig-next-${m.id}`;
@@ -3346,15 +3356,16 @@
           market: 'Prossimo Gol / Esito Live',
           fairOdd: fairTeamNext,
           minBetfairOdd: minBetfairTeam,
-          liveOdd: betfairCustomOdds[sigNextId] || minBetfairTeam,
+          minOperationalOdd: LIVE_MIN_OPERATIONAL_ODD,
+          liveOdd: betfairCustomOdds[sigNextId] || Math.max(minBetfairTeam, LIVE_MIN_OPERATIONAL_ODD),
           confidence: 9.0,
           triggerReason: `${domTeam} genera il ${Math.round(domShare * 100)}% della pressione offensiva live (xG ${s.xgHome.toFixed(2)}-${s.xgAway.toFixed(2)}, Tiri in Porta ${s.shotsOnTargetHome}-${s.shotsOnTargetAway}).`,
-          urgency: semaphore.status === 'ENTER_NOW' ? '🟢🔥 ASSEDIO ATTIVO' : '🟡 MONITORA DOMINIO'
+          urgency: semaphore.status === 'ENTER_NOW' && minBetfairTeam >= LIVE_MIN_OPERATIONAL_ODD ? '🟢🔥 ASSEDIO ATTIVO' : '🟡 MONITORA DOMINIO'
         });
       }
 
       m.liveSignals = signals;
-      // Se il semaforo è verde (ENTRA ORA), congela automaticamente il segnale nello Storico Live!
+      // Se il semaforo è verde (ENTRA ORA con quota >= 1.60), congela automaticamente il segnale nello Storico Live!
       recordLiveSignalSnapshot(m, signals[0], semaphore, preMatchInfo);
       return signals;
     }
@@ -3422,7 +3433,7 @@
       scozia: 'scotland', portogallo: 'portugal', polonia: 'poland', danimarca: 'denmark',
       ungheria: 'hungary', repceca: 'czechia', repubblicaceca: 'czechia', czechrepublic: 'czechia',
       finlandia: 'finland', lettonia: 'latvia', lituania: 'lithuania', cipro: 'cyprus',
-      irlanda: 'ireland', irlandadelnord: 'northernireland', ucraina: 'ukraine',
+      irlanda: 'ireland', republicofireland: 'ireland', repubblicadirlanda: 'ireland', irlandadelnord: 'northernireland', ucraina: 'ukraine',
       romania: 'romania', bulgaria: 'bulgaria', slovacchia: 'slovakia',
       austria: 'austria', serbia: 'serbia', slovenia: 'slovenia', albania: 'albania',
       armenia: 'armenia', montenegro: 'montenegro', islanda: 'iceland',
@@ -3899,98 +3910,98 @@
                 <span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] text-[var(--success)]">xG ${s.xgHome.toFixed(2)}-${s.xgAway.toFixed(2)}</span>
                 <span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] text-[var(--foreground)]">🎯 Porta ${s.shotsOnTargetHome}-${s.shotsOnTargetAway}</span>
                 <span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] text-[var(--muted-foreground)]">📦 Area ${s.shotsInsideBoxHome}-${s.shotsInsideBoxAway}</span>
-                ${topSig ? `<span class="px-2 py-0.5 rounded bg-[var(--primary)]/20 text-[var(--primary)] font-bold">Betfair Min ≥ @${topSig.minBetfairOdd.toFixed(2)}</span>` : ''}
-                <span class="px-2 py-0.5 rounded bg-[var(--secondary)] text-[var(--foreground)] font-bold">${isOpen ? '▲ Chiudi' : '▼ Apri Qui'}</span>
+                ${topSig ? `<span class="px-2 py-0.5 rounded bg-[var(--primary)]/20 text-[var(--primary)] font-bold">Target ≥ @${Math.max(topSig.minBetfairOdd, topSig.minOperationalOdd || 1.60).toFixed(2)}</span>` : ''}
+                <span class="px-2 py-0.5 rounded bg-[var(--secondary)] text-[var(--foreground)] font-bold">${isOpen ? '▲ Chiudi' : '▼ Apri'}</span>
               </div>
             </div>
 
-            <!-- CONTENUTO ESPANSO INLINE SUBITO SOTTO LA RIGA -->
+            <!-- CONTENUTO ESPANSO INLINE (PULITO & ESSENZIALE) -->
             ${isOpen ? `
               <div class="p-3 md:p-4 bg-[var(--background)]/60 space-y-3">
-                <!-- Banner Diagnostico Semaforo: QUANDO SCOMMETTERE + INCROCIO PRE-MATCH -->
+                <!-- Banner Semaforo + Stato Pre-Match -->
                 <div class="p-3 rounded-xl border ${sem.badgeClass} space-y-2 text-xs">
                   <div class="flex flex-wrap items-center justify-between gap-2">
                     <div class="font-bold text-sm">${sem.badgeText}</div>
-                    <span class="font-mono text-[11px] font-semibold">${preInfo.label}</span>
+                    <span class="px-2 py-0.5 rounded bg-[var(--card)] border border-[var(--border)] font-mono text-[11px] font-semibold">${preInfo.matched ? `⚡ ${preInfo.preSelection} (@+${preInfo.preEv.toFixed(1)}% EV)` : '📡 Solo Telemetria Live'}</span>
                   </div>
-                  <div class="text-[var(--foreground)]">${sem.actionAdvice}</div>
-                  <div class="grid grid-cols-2 md:grid-cols-4 gap-1.5 pt-1">
+                  <div class="text-[var(--foreground)] leading-relaxed">${sem.actionAdvice}</div>
+                  <div class="flex flex-wrap gap-1.5 pt-0.5">
                     ${sem.checklist.map(c => `
-                      <div class="px-2 py-1 rounded bg-[var(--card)] border border-[var(--border)] font-mono text-[11px] flex items-center gap-1.5">
-                        <span>${c.ok ? '✅' : '⏳'}</span>
-                        <span class="${c.ok ? 'text-[var(--foreground)] font-bold' : 'text-[var(--muted-foreground)]'}">${c.label}</span>
-                      </div>
+                      <span class="px-2 py-0.5 rounded bg-[var(--card)] border border-[var(--border)] font-mono text-[10px] ${c.ok ? 'text-[var(--foreground)] font-bold' : 'text-[var(--muted-foreground)]'}">${c.ok ? '✅' : '⏳'} ${c.label}</span>
                     `).join('')}
                   </div>
                 </div>
 
-                <div class="grid grid-cols-1 lg:grid-cols-12 gap-3.5">
-                  <!-- Colonna Sinistra: Statistiche Live in Tempo Reale -->
-                  <div class="lg:col-span-6 bg-[var(--card)] border border-[var(--border)] rounded-xl p-3 space-y-3">
-                    <div class="flex items-center justify-between text-xs border-b border-[var(--border)] pb-2">
-                      <span class="font-bold text-[var(--primary)]">📊 TELEMETRIA CAMPO IN DIRETTA (${m.minute}')</span>
-                      <span class="font-mono text-[var(--muted-foreground)]">Deficit xG: ${sem.xgDeficit >= 0 ? '+' : ''}${sem.xgDeficit} • Residui: ~${Math.max(3, 93 - m.minute)}'</span>
+                <div class="grid grid-cols-1 lg:grid-cols-12 gap-3">
+                  <!-- Colonna Sinistra: Telemetria Campo Essenziale -->
+                  <div class="lg:col-span-5 bg-[var(--card)] border border-[var(--border)] rounded-xl p-3 space-y-2.5">
+                    <div class="flex items-center justify-between text-xs border-b border-[var(--border)] pb-1.5">
+                      <span class="font-bold text-[var(--primary)]">📊 TELEMETRIA LIVE (${m.minute}')</span>
+                      <span class="font-mono text-[11px] text-[var(--muted-foreground)]">Deficit xG: ${sem.xgDeficit >= 0 ? '+' : ''}${sem.xgDeficit}</span>
                     </div>
                     <div class="grid grid-cols-4 gap-1.5 text-center font-mono text-xs">
-                      <div class="p-2 rounded bg-[var(--background)] border border-[var(--border)]">
-                        <div class="text-[10px] text-[var(--muted-foreground)]">xG Live</div>
-                        <div class="font-bold text-[var(--success)] mt-0.5">${s.xgHome.toFixed(2)}-${s.xgAway.toFixed(2)}</div>
+                      <div class="p-1.5 rounded bg-[var(--background)] border border-[var(--border)]">
+                        <div class="text-[10px] text-[var(--muted-foreground)]">xG</div>
+                        <div class="font-bold text-[var(--success)]">${s.xgHome.toFixed(2)}-${s.xgAway.toFixed(2)}</div>
                       </div>
-                      <div class="p-2 rounded bg-[var(--background)] border border-[var(--border)]">
-                        <div class="text-[10px] text-[var(--muted-foreground)]">Tiri Porta</div>
-                        <div class="font-bold text-[var(--primary)] mt-0.5">${s.shotsOnTargetHome}-${s.shotsOnTargetAway}</div>
+                      <div class="p-1.5 rounded bg-[var(--background)] border border-[var(--border)]">
+                        <div class="text-[10px] text-[var(--muted-foreground)]">Porta</div>
+                        <div class="font-bold text-[var(--primary)]">${s.shotsOnTargetHome}-${s.shotsOnTargetAway}</div>
                       </div>
-                      <div class="p-2 rounded bg-[var(--background)] border border-[var(--border)]">
-                        <div class="text-[10px] text-[var(--muted-foreground)]">Tiri Area</div>
-                        <div class="font-bold mt-0.5">${s.shotsInsideBoxHome}-${s.shotsInsideBoxAway}</div>
+                      <div class="p-1.5 rounded bg-[var(--background)] border border-[var(--border)]">
+                        <div class="text-[10px] text-[var(--muted-foreground)]">Area</div>
+                        <div class="font-bold">${s.shotsInsideBoxHome}-${s.shotsInsideBoxAway}</div>
                       </div>
-                      <div class="p-2 rounded bg-[var(--background)] border border-[var(--border)]">
+                      <div class="p-1.5 rounded bg-[var(--background)] border border-[var(--border)]">
                         <div class="text-[10px] text-[var(--muted-foreground)]">Corner</div>
-                        <div class="font-bold mt-0.5">${s.cornersHome}-${s.cornersAway}</div>
+                        <div class="font-bold">${s.cornersHome}-${s.cornersAway}</div>
                       </div>
                     </div>
-                    <div class="space-y-2 pt-1">
+                    <div class="space-y-1.5 pt-1">
                       ${renderLiveStatBar('Attacchi Pericolosi', s.dangAttacksHome, s.dangAttacksAway)}
-                      ${renderLiveStatBar('Tiri Dentro l\'Area (Shots in Box)', s.shotsInsideBoxHome, s.shotsInsideBoxAway)}
-                      ${renderLiveStatBar('Tiri in Porta (Shots on Target)', s.shotsOnTargetHome, s.shotsOnTargetAway)}
-                      ${renderLiveStatBar('Calci d\'Angolo (Corners)', s.cornersHome, s.cornersAway)}
+                      ${renderLiveStatBar('Tiri in Area', s.shotsInsideBoxHome, s.shotsInsideBoxAway)}
+                      ${renderLiveStatBar('Tiri in Porta', s.shotsOnTargetHome, s.shotsOnTargetAway)}
                     </div>
                   </div>
 
-                  <!-- Colonna Destra: Segnali Live + Calcolatore Quota Betfair Exchange (5% Commissione) -->
-                  <div class="lg:col-span-6 space-y-2.5">
+                  <!-- Colonna Destra: Segnale Operativo Betfair (Soglia Minima @1.60) -->
+                  <div class="lg:col-span-7 space-y-2.5">
                     ${m.liveSignals.map(sig => {
-                      const userBfOdd = betfairCustomOdds[sig.id] || sig.liveOdd || sig.minBetfairOdd;
+                      const floorOdd = sig.minOperationalOdd || 1.60;
+                      const effectiveMinOdd = Math.max(sig.minBetfairOdd, floorOdd);
+                      const userBfOdd = betfairCustomOdds[sig.id] || sig.liveOdd || effectiveMinOdd;
                       const evalBf = evaluateBetfairBackOdd(userBfOdd, sig.fairOdd);
-                      const isValueOnBetfair = userBfOdd >= sig.minBetfairOdd && sem.status === 'ENTER_NOW';
+                      const meetsFloor = userBfOdd >= floorOdd;
+                      const isValueOnBetfair = userBfOdd >= effectiveMinOdd && sem.status === 'ENTER_NOW';
                       const inSlip = betSlip.some(i => i.id === sig.id);
 
                       return `
                         <div class="bg-[var(--card)] border-2 ${isValueOnBetfair ? 'border-[var(--success)]' : sem.status === 'PREPARE' ? 'border-[var(--warning)]' : 'border-[var(--border)]'} rounded-xl p-3 space-y-2.5">
-                          <div class="flex items-center justify-between gap-2 text-xs">
+                          <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
                             <span class="px-2 py-0.5 rounded bg-[var(--primary)] text-[var(--primary-foreground)] font-mono font-bold text-[11px]">${sig.signalType}</span>
                             <span class="font-mono font-bold text-[11px] ${sem.status === 'ENTER_NOW' ? 'text-[var(--success)]' : sem.status === 'PREPARE' ? 'text-[var(--warning)]' : 'text-[var(--muted-foreground)]'}">${sig.urgency}</span>
                           </div>
 
                           <div class="text-sm font-bold text-[var(--foreground)]">🎯 ${sig.selection}</div>
-                          <div class="text-[11px] text-[var(--muted-foreground)] bg-[var(--background)] p-2 rounded border border-[var(--border)]">
-                            ${sig.triggerReason}
-                          </div>
 
-                          <div class="grid grid-cols-2 gap-2 text-center font-mono text-xs">
+                          <div class="grid grid-cols-3 gap-2 text-center font-mono text-xs">
                             <div class="p-2 rounded bg-[var(--background)] border border-[var(--border)]">
-                              <div class="text-[10px] text-[var(--muted-foreground)]">Fair Odd Reale (0% Aggio)</div>
-                              <div class="font-bold text-sm text-[var(--foreground)] mt-0.5">@${sig.fairOdd.toFixed(2)} <span class="text-[10px] text-[var(--muted-foreground)]">(${evalBf.probPct}%)</span></div>
+                              <div class="text-[10px] text-[var(--muted-foreground)]">Fair Odd</div>
+                              <div class="font-bold text-sm text-[var(--foreground)]">@${sig.fairOdd.toFixed(2)}</div>
+                            </div>
+                            <div class="p-2 rounded bg-[var(--background)] border border-[var(--border)]">
+                              <div class="text-[10px] text-[var(--muted-foreground)]">Min Matematica</div>
+                              <div class="font-bold text-sm text-[var(--foreground)]">@${sig.minBetfairOdd.toFixed(2)}</div>
                             </div>
                             <div class="p-2 rounded bg-[var(--primary)]/10 border border-[var(--primary)]/50">
-                              <div class="text-[10px] text-[var(--primary)] font-bold">Quota Minima Betfair (Punta)</div>
-                              <div class="font-bold text-sm text-[var(--primary)] mt-0.5">≥ @${sig.minBetfairOdd.toFixed(2)} <span class="text-[10px]">(netto 5%)</span></div>
+                              <div class="text-[10px] text-[var(--primary)] font-bold">Soglia Minima</div>
+                              <div class="font-bold text-sm text-[var(--primary)]">≥ @${effectiveMinOdd.toFixed(2)}</div>
                             </div>
                           </div>
 
                           <div class="p-2.5 rounded-lg bg-[var(--background)] border border-[var(--border)] space-y-2">
                             <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
-                              <span class="font-bold text-[var(--warning)]">📲 Inserisci la Quota "Punta" che vedi su Betfair:</span>
+                              <span class="font-bold text-[var(--warning)]">📲 Quota Betfair (Punta):</span>
                               <div class="flex items-center gap-1 font-mono">
                                 <button onclick="updateBetfairCustomOdd('${sig.id}', -0.05, false)" class="px-2 py-1 rounded bg-[var(--secondary)] hover:bg-[var(--primary)] hover:text-[var(--primary-foreground)] font-bold">-0.05</button>
                                 <input type="number" step="0.02" min="1.02" max="50" value="${userBfOdd.toFixed(2)}" onchange="updateBetfairCustomOdd('${sig.id}', this.value, true)" class="w-16 text-center bg-[var(--card)] border border-[var(--primary)] rounded py-1 font-bold text-xs text-[var(--foreground)]" />
@@ -3998,20 +4009,22 @@
                               </div>
                             </div>
 
-                            <div class="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-[var(--border)] text-xs font-mono">
-                              <span class="${sem.status === 'ENTER_NOW' && evalBf.netEvPct >= 4.0 ? 'text-[var(--success)] font-bold' : evalBf.netEvPct > 0 ? 'text-[var(--warning)] font-bold' : 'text-[var(--error)] font-bold'}">
-                                ${sem.status !== 'ENTER_NOW'
-                                  ? `⏳ ATTENDI SEMAFORO VERDE (Score attuale ${sem.score}/72)`
-                                  : evalBf.netEvPct >= 4.0
-                                    ? `🟢🔥 ENTRA ORA SU BETFAIR (+${evalBf.netEvPct}% EV Netto)`
-                                    : `⛔ QUOTA BETFAIR TROPPO BASSA (${evalBf.netEvPct}% EV → ATTENDI @${sig.minBetfairOdd.toFixed(2)})`}
+                            <div class="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-[var(--border)] text-xs font-mono">
+                              <span class="${isValueOnBetfair && evalBf.netEvPct >= 4.0 ? 'text-[var(--success)] font-bold' : 'text-[var(--warning)] font-bold'}">
+                                ${!meetsFloor
+                                  ? `⛔ QUOTA SOTTO @${floorOdd.toFixed(2)} (NO-VALUE R/R → ATTENDI)`
+                                  : sem.status !== 'ENTER_NOW'
+                                    ? `⏳ ATTENDI SEMAFORO VERDE (${sem.score}/72)`
+                                    : evalBf.netEvPct >= 4.0
+                                      ? `🟢 ENTRA ORA (+${evalBf.netEvPct}% EV Netto)`
+                                      : `⛔ QUOTA BASSA (ATTENDI ≥ @${effectiveMinOdd.toFixed(2)})`}
                               </span>
-                              <span>Stake Kelly: <strong class="text-[var(--primary)]">€${sem.status === 'ENTER_NOW' ? evalBf.kelly.euro : 0}</strong></span>
+                              <span>Stake: <strong class="text-[var(--primary)]">€${isValueOnBetfair ? evalBf.kelly.euro : 0}</strong></span>
                             </div>
                           </div>
 
                           <button onclick="toggleSlipItem('${sig.id}', '${m.home} - ${m.away} (LIVE ${m.minute}\\')', '${sig.selection}', ${userBfOdd}, ${evalBf.probPct}, ${Math.max(0, evalBf.netEvPct)}, true)" class="w-full py-2 rounded-lg text-xs font-bold transition ${inSlip ? 'bg-[var(--success)] text-white' : 'bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90'}">
-                            ${inSlip ? '✓ Giocata Live in Schedina' : `⚡ Metti in Schedina a Quota Betfair @${userBfOdd.toFixed(2)}`}
+                            ${inSlip ? '✓ In Schedina' : `⚡ Metti in Schedina @${userBfOdd.toFixed(2)}`}
                           </button>
                         </div>
                       `;

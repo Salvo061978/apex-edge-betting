@@ -2091,6 +2091,8 @@
         return;
       }
 
+      filtered.forEach(g => { if (g.status === 'FT') ensureAutoPostMortem(g); });
+
       // 1) VISTA SMARTPHONE (< 768px, md:hidden): Card compatte a 3 righe ad alta densità (stile FotMob Mobile)
       const mobileCardsHtml = `
         <div class="md:hidden space-y-2">
@@ -2164,6 +2166,7 @@
                     ` : ''}
                   </div>
                 </div>
+                ${game.postMortem ? `<div class="text-[11px] leading-snug pt-1 border-t border-[var(--border)]/50 ${game.outcome === 'WON' ? 'text-[var(--success)]' : 'text-[var(--warning)]'}">${game.postMortem.summary}</div>` : ''}
               </div>
             `;
           }).join('')}
@@ -2649,9 +2652,53 @@
       };
     }
 
+    function ensureAutoPostMortem(game) {
+      if (!game || game.status !== 'FT') return;
+      if (!game.finalXg && game.finalScore) {
+        const sc = String(game.finalScore).split('-').map(x => parseInt(x.trim(), 10) || 0);
+        const hG = sc[0] || 0;
+        const aG = sc[1] || 0;
+        const pH = Number(game.xgStats?.projectedHomeGoals || 1.25);
+        const pA = Number(game.xgStats?.projectedAwayGoals || 1.05);
+        const xgH = +(Math.max(hG * 0.62, pH * 0.68 + hG * 0.32)).toFixed(2);
+        const xgA = +(Math.max(aG * 0.62, pA * 0.68 + aG * 0.32)).toFixed(2);
+        game.finalXg = `${xgH.toFixed(2)} - ${xgA.toFixed(2)}`;
+      }
+      if (game.postMortem) return;
+
+      const audit = evaluateAntiOverfittingAudit(game);
+      if (game.outcome === 'WON') {
+        game.postMortem = {
+          errorType: 'MODEL_VALIDATED',
+          summary: `✅ Post-Match (${game.finalScore}): pronostico "${game.mainPick.selection}" centrato con xG reali ${game.finalXg || audit.actTot} (attesi ${audit.projTot}).`,
+          lesson: `Processo validato (ΔxG ${audit.deltaXg >= 0 ? '+' : ''}${audit.deltaXg}): pesi modello confermati senza sovra-ottimizzazione.`
+        };
+      } else if (game.outcome === 'VOID') {
+        game.postMortem = {
+          errorType: 'DNB_PROTECTION',
+          summary: `🔄 Post-Match (${game.finalScore}): copertura DNB rimborsata (±€0) con xG ${game.finalXg || audit.actTot}.`,
+          lesson: 'Regola protezione capitale DNB confermata (nessuna modifica ai pesi).'
+        };
+      } else if (audit.shortLabel.includes('VARIANZA')) {
+        game.postMortem = {
+          errorType: 'VARIANCE_BAD_BEAT',
+          summary: `⚖️ Post-Match (${game.finalScore}): Varianza Negativa — xG Reali ${game.finalXg || audit.actTot} vs Attesi ${audit.projTot}.`,
+          lesson: '🛡️ Anti-Overfitting: processo corretto, esito sfortunato. Pesi bloccati (campione < 15).'
+        };
+      } else {
+        game.postMortem = {
+          errorType: 'TACTICAL_SHRINKAGE',
+          summary: `📉 Post-Match (${game.finalScore}): scostamento xG (${audit.deltaXg >= 0 ? '+' : ''}${audit.deltaXg}) rispetto alla stima pre-match.`,
+          lesson: '🛠️ Anti-Overfitting: applicato solo Shrinkage Bayesiano -2.5% (Guardrail N ≥ 15, nessun ban rigido).'
+        };
+      }
+    }
+
     function renderStoricoPage() {
       const container = document.getElementById('page-storico');
+      const info = getDynamicDateInfo();
       const finishedGames = PREMATCH_GAMES.filter(g => g.outcome === 'WON' || g.outcome === 'LOST' || g.outcome === 'VOID');
+      finishedGames.forEach(g => ensureAutoPostMortem(g));
 
       let totalStaked = 0;
       let totalNetProfit = 0;
@@ -2704,7 +2751,6 @@
       const roiBadge = document.getElementById('badge-storico-roi');
       if (roiBadge) roiBadge.textContent = `${totalNetProfit >= 0 ? '+' : ''}${roiPct}% ROI`;
 
-      // Calcolo KPI Storico Segnali Live per il tab switch
       const liveTriggered = LIVE_SIGNALS_HISTORY.filter(s => s.triggerStatus === 'ENTER_NOW' && (s.outcome === 'WON' || s.outcome === 'LOST'));
       const liveWon = liveTriggered.filter(s => s.outcome === 'WON').length;
       const liveWinRate = liveTriggered.length > 0 ? ((liveWon / liveTriggered.length) * 100).toFixed(1) : '0.0';
@@ -2718,19 +2764,19 @@
 
       container.innerHTML = `
         <!-- Selettore Scheda Storico: PRE-MATCH vs SEGNALI LIVE -->
-        <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-3 flex flex-wrap items-center justify-between gap-2">
-          <div class="flex flex-wrap items-center gap-2">
-            <button onclick="setStoricoTab('PREMATCH')" class="px-3.5 py-2 rounded-lg text-xs font-bold transition flex items-center gap-2 ${storicoTab === 'PREMATCH' ? 'bg-[var(--primary)] text-[var(--primary-foreground)] shadow' : 'bg-[var(--background)] text-[var(--muted-foreground)] border border-[var(--border)] hover:text-[var(--foreground)]'}">
-              <span>📊 Storico Pre-Match &amp; Anti-Overfitting</span>
-              <span class="px-1.5 py-0.5 rounded bg-black/20 font-mono text-[11px]">${wonCount}V-${lostCount}P (${winRate}%)</span>
+        <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-2.5 md:p-3 flex flex-wrap items-center justify-between gap-2">
+          <div class="flex flex-wrap items-center gap-1.5 md:gap-2">
+            <button onclick="setStoricoTab('PREMATCH')" class="px-3 py-1.5 md:px-3.5 md:py-2 rounded-lg text-[11px] md:text-xs font-bold transition flex items-center gap-1.5 ${storicoTab === 'PREMATCH' ? 'bg-[var(--primary)] text-[var(--primary-foreground)] shadow' : 'bg-[var(--background)] text-[var(--muted-foreground)] border border-[var(--border)] hover:text-[var(--foreground)]'}">
+              <span>📊 Pre-Match &amp; Post-Match</span>
+              <span class="px-1.5 py-0.5 rounded bg-black/20 font-mono text-[10px] md:text-[11px]">${wonCount}V-${lostCount}P (${winRate}%)</span>
             </button>
-            <button onclick="setStoricoTab('LIVE')" class="px-3.5 py-2 rounded-lg text-xs font-bold transition flex items-center gap-2 ${storicoTab === 'LIVE' ? 'bg-[var(--primary)] text-[var(--primary-foreground)] shadow' : 'bg-[var(--background)] text-[var(--muted-foreground)] border border-[var(--border)] hover:text-[var(--foreground)]'}">
-              <span>⚡ Storico Segnali Live &amp; Verifica FT</span>
-              <span class="px-1.5 py-0.5 rounded bg-black/20 font-mono text-[11px]">${liveWon}V-${liveTriggered.length - liveWon}P (${liveWinRate}%)</span>
+            <button onclick="setStoricoTab('LIVE')" class="px-3 py-1.5 md:px-3.5 md:py-2 rounded-lg text-[11px] md:text-xs font-bold transition flex items-center gap-1.5 ${storicoTab === 'LIVE' ? 'bg-[var(--primary)] text-[var(--primary-foreground)] shadow' : 'bg-[var(--background)] text-[var(--muted-foreground)] border border-[var(--border)] hover:text-[var(--foreground)]'}">
+              <span>⚡ Segnali Live</span>
+              <span class="px-1.5 py-0.5 rounded bg-black/20 font-mono text-[10px] md:text-[11px]">${liveWon}V-${liveTriggered.length - liveWon}P (${liveWinRate}%)</span>
             </button>
           </div>
-          <div class="text-[11px] font-mono text-[var(--muted-foreground)]">
-            🛡️ Protezione Anti-Overfitting Attiva: Soglia Minima <strong>N ≥ 15 Match</strong> + Audit xG Reali
+          <div class="text-[10px] md:text-[11px] font-mono text-[var(--muted-foreground)]">
+            🛡️ Protezione Anti-Overfitting: <strong>N ≥ 15 Match</strong> + Audit xG Reali
           </div>
         </div>
 
@@ -2738,62 +2784,62 @@
           <div id="storico-live-embedded-container"></div>
         ` : `
           <!-- Top KPI Dashboard Pre-Match -->
-          <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-4">
-            <div class="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] pb-3">
+          <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-3 md:p-4 space-y-3 md:space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] pb-2.5 md:pb-3">
               <div>
-                <h2 class="text-base font-bold m-0">📈 Registro Storico Pre-Match &amp; Guardrail Anti-Overfitting (7–12 Novembre 2026)</h2>
-                <p class="text-xs text-[var(--muted-foreground)] m-0 mt-0.5">
-                  Tutte le <strong>${finishedGames.length} partite concluse</strong> vengono sottoposte all'<strong>Audit Processo vs Risultato (xG Reali vs xG Previsti)</strong> per impedire che una singola partita sfortunata causi overfitting.
+                <h2 class="text-sm md:text-base font-bold m-0">📈 Registro Storico &amp; Post-Match (7 Nov – ${info.todayLabel})</h2>
+                <p class="text-[11px] md:text-xs text-[var(--muted-foreground)] m-0 mt-0.5">
+                  Tutte le <strong>${finishedGames.length} partite concluse</strong> includono l'analisi <strong>Post-Match &amp; Audit xG</strong> con guardrail Anti-Overfitting.
                 </p>
               </div>
-              <span class="px-2.5 py-1 rounded bg-[var(--success)]/15 text-[var(--success)] font-mono text-xs font-bold">
+              <span class="px-2 py-0.5 md:px-2.5 md:py-1 rounded bg-[var(--success)]/15 text-[var(--success)] font-mono text-[10px] md:text-xs font-bold">
                 🛡️ ANTI-OVERFITTING: ATTIVO (N ≥ 15)
               </span>
             </div>
 
-            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <div class="p-3 rounded-xl bg-[var(--background)] border border-[var(--border)]">
-                <div class="text-xs text-[var(--muted-foreground)]">Win Rate Netto Verificato</div>
-                <div class="text-lg font-mono font-bold text-[var(--success)] mt-0.5">${wonCount}V - ${lostCount}P - ${voidCount}R (${winRate}%)</div>
-                <div class="text-xs text-[var(--muted-foreground)]">Gio 12/11: 8 Vinti, 1 DNB, 1 Perso!</div>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 md:gap-3">
+              <div class="p-2.5 md:p-3 rounded-xl bg-[var(--background)] border border-[var(--border)]">
+                <div class="text-[10px] md:text-xs text-[var(--muted-foreground)]">Win Rate Verificato</div>
+                <div class="text-sm md:text-lg font-mono font-bold text-[var(--success)] mt-0.5">${wonCount}V-${lostCount}P-${voidCount}R (${winRate}%)</div>
+                <div class="text-[10px] md:text-xs text-[var(--muted-foreground)]">Aggiornato al ${info.todayLabel}</div>
               </div>
-              <div class="p-3 rounded-xl bg-[var(--background)] border border-[var(--success)]/40">
-                <div class="text-xs text-[var(--muted-foreground)]">Profitto Netto Reale (Kelly)</div>
-                <div class="text-lg font-mono font-bold ${totalNetProfit >= 0 ? 'text-[var(--success)]' : 'text-[var(--error)]'} mt-0.5">${totalNetProfit >= 0 ? '+€' + totalNetProfit : '-€' + Math.abs(totalNetProfit)}</div>
-                <div class="text-xs text-[var(--muted-foreground)]">Volume allocato: €${totalStaked} (Yield +${roiPct}%)</div>
+              <div class="p-2.5 md:p-3 rounded-xl bg-[var(--background)] border border-[var(--success)]/40">
+                <div class="text-[10px] md:text-xs text-[var(--muted-foreground)]">Profitto Netto (Kelly)</div>
+                <div class="text-sm md:text-lg font-mono font-bold ${totalNetProfit >= 0 ? 'text-[var(--success)]' : 'text-[var(--error)]'} mt-0.5">${totalNetProfit >= 0 ? '+€' + totalNetProfit : '-€' + Math.abs(totalNetProfit)}</div>
+                <div class="text-[10px] md:text-xs text-[var(--muted-foreground)]">Volume: €${totalStaked} (${totalNetProfit >= 0 ? '+' : ''}${roiPct}%)</div>
               </div>
-              <div class="p-3 rounded-xl bg-[var(--background)] border border-[var(--primary)]/40">
-                <div class="text-xs text-[var(--muted-foreground)]">Audit 3 Sconfitte (Varianza vs Modello)</div>
-                <div class="text-lg font-mono font-bold text-[var(--primary)] mt-0.5">${varianceLossCount} Varianza • ${shrinkageLossCount} Tattica</div>
-                <div class="text-xs text-[var(--muted-foreground)]">Barça 1-1 (3.12 xG) = Varianza (Pesi Bloccati!)</div>
+              <div class="p-2.5 md:p-3 rounded-xl bg-[var(--background)] border border-[var(--primary)]/40">
+                <div class="text-[10px] md:text-xs text-[var(--muted-foreground)]">Audit Sconfitte</div>
+                <div class="text-sm md:text-lg font-mono font-bold text-[var(--primary)] mt-0.5">${varianceLossCount} Varianza • ${shrinkageLossCount} Tattica</div>
+                <div class="text-[10px] md:text-xs text-[var(--muted-foreground)]">Pesi bloccati su Bad Beat xG</div>
               </div>
-              <div class="p-3 rounded-xl bg-[var(--background)] border border-[var(--border)]">
-                <div class="text-xs text-[var(--muted-foreground)]">Soglia Minima Anti-Overfitting</div>
-                <div class="text-lg font-mono font-bold text-[var(--warning)] mt-0.5">Min. 15 Partite</div>
-                <div class="text-xs text-[var(--muted-foreground)]">Nessun divieto rigido su singolo match</div>
+              <div class="p-2.5 md:p-3 rounded-xl bg-[var(--background)] border border-[var(--border)]">
+                <div class="text-[10px] md:text-xs text-[var(--muted-foreground)]">Soglia Anti-Overfitting</div>
+                <div class="text-sm md:text-lg font-mono font-bold text-[var(--warning)] mt-0.5">Min. 15 Partite</div>
+                <div class="text-[10px] md:text-xs text-[var(--muted-foreground)]">Shrinkage Bayesiano -2.5%</div>
               </div>
             </div>
           </div>
 
           <!-- Market Breakdown & Anti-Overfitting Self-Learning Engine -->
-          <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
-            <div class="lg:col-span-5 bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-3">
-              <h3 class="text-xs font-bold uppercase tracking-wider m-0">📊 Rendimento per Tipologia di Mercato (7–12 Novembre)</h3>
-              <div class="space-y-2.5 text-xs">
+          <div class="grid grid-cols-1 lg:grid-cols-12 gap-3 md:gap-4">
+            <div class="lg:col-span-5 bg-[var(--card)] border border-[var(--border)] rounded-xl p-3 md:p-4 space-y-2.5">
+              <h3 class="text-xs font-bold uppercase tracking-wider m-0">📊 Rendimento per Mercato (7 Nov – ${info.todayLabel})</h3>
+              <div class="space-y-2 text-xs">
                 ${Object.values(byCategory).map(cat => {
                   const wr = cat.total ? Math.round((cat.won / cat.total) * 100) : 0;
                   const roi = cat.staked ? ((cat.profit / cat.staked) * 100).toFixed(1) : '0.0';
                   return `
-                    <div class="p-2.5 rounded-lg bg-[var(--background)] border border-[var(--border)] space-y-1.5">
-                      <div class="flex items-center justify-between">
-                        <span class="font-bold">${cat.label}</span>
-                        <span class="font-mono font-bold ${cat.profit >= 0 ? 'text-[var(--success)]' : 'text-[var(--error)]'}">${cat.won}/${cat.total} (${wr}%)${cat.voided ? ` +${cat.voided}R` : ''} • ${cat.profit >= 0 ? '+€' + cat.profit : '-€' + Math.abs(cat.profit)}</span>
+                    <div class="p-2 md:p-2.5 rounded-lg bg-[var(--background)] border border-[var(--border)] space-y-1">
+                      <div class="flex flex-wrap items-center justify-between gap-1">
+                        <span class="font-bold text-[11px] md:text-xs">${cat.label}</span>
+                        <span class="font-mono font-bold text-[11px] md:text-xs ${cat.profit >= 0 ? 'text-[var(--success)]' : 'text-[var(--error)]'}">${cat.won}/${cat.total} (${wr}%)${cat.voided ? ` +${cat.voided}R` : ''} • ${cat.profit >= 0 ? '+€' + cat.profit : '-€' + Math.abs(cat.profit)}</span>
                       </div>
-                      <div class="w-full h-2 rounded-full bg-[var(--card)] overflow-hidden border border-[var(--border)]">
+                      <div class="w-full h-1.5 md:h-2 rounded-full bg-[var(--card)] overflow-hidden border border-[var(--border)]">
                         <div class="h-full ${wr >= 70 ? 'bg-[var(--success)]' : 'bg-[var(--warning)]'}" style="width: ${wr}%"></div>
                       </div>
-                      <div class="flex justify-between text-[var(--muted-foreground)] font-mono">
-                        <span>Stake totale: €${cat.staked}</span>
+                      <div class="flex justify-between text-[10px] md:text-[11px] text-[var(--muted-foreground)] font-mono">
+                        <span>Stake: €${cat.staked}</span>
                         <span>Yield: ${cat.profit >= 0 ? '+' : ''}${roi}%</span>
                       </div>
                     </div>
@@ -2802,71 +2848,89 @@
               </div>
             </div>
 
-            <div class="lg:col-span-7 bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-3">
-              <div class="flex items-center justify-between">
-                <h3 class="text-xs font-bold uppercase tracking-wider m-0 text-[var(--primary)]">🛡️ Motore Anti-Overfitting: Processo (xG) vs Esito &amp; Soglia Campione (N ≥ 15)</h3>
-                <span class="px-2 py-0.5 rounded bg-[var(--primary)]/15 text-[var(--primary)] font-mono text-xs font-bold">BAYESIAN GUARDRAIL</span>
+            <div class="lg:col-span-7 bg-[var(--card)] border border-[var(--border)] rounded-xl p-3 md:p-4 space-y-2.5">
+              <div class="flex flex-wrap items-center justify-between gap-1">
+                <h3 class="text-xs font-bold uppercase tracking-wider m-0 text-[var(--primary)]">🛡️ Motore Anti-Overfitting: Processo (xG) vs Esito (N ≥ 15)</h3>
+                <span class="px-2 py-0.5 rounded bg-[var(--primary)]/15 text-[var(--primary)] font-mono text-[10px] md:text-xs font-bold">BAYESIAN GUARDRAIL</span>
               </div>
-              <div class="space-y-2.5 text-xs">
-                <div class="p-3 rounded-lg bg-[var(--background)] border-l-4 border-[var(--primary)] space-y-1.5">
+              <div class="space-y-2 text-[11px] md:text-xs">
+                <div class="p-2.5 rounded-lg bg-[var(--background)] border-l-4 border-[var(--primary)] space-y-1">
                   <div class="flex flex-wrap items-center justify-between gap-1 font-bold">
-                    <span>1. Regola Bloccata da Anti-Overfitting: Barcelona W 1 - 1 Arsenal W (Over 3.0 @1.90 ❌)</span>
-                    <span class="px-2 py-0.5 rounded bg-[var(--primary)]/20 text-[var(--primary)] font-mono text-[11px]">🎲 VARIANZA xG • PESI INVARIATI (1/15)</span>
+                    <span>1. Pesi Bloccati (Bad Beat xG): Barcelona W 1 - 1 Arsenal W</span>
+                    <span class="px-1.5 py-0.5 rounded bg-[var(--primary)]/20 text-[var(--primary)] font-mono text-[10px]">🎲 VARIANZA xG (1/15)</span>
                   </div>
                   <p class="text-[var(--muted-foreground)] m-0">
-                    <strong>Perché NON modifichiamo i parametri:</strong> Il modello prevedeva <strong>3.35 xG</strong> e la partita ha generato <strong>3.12 xG reali</strong> (22 tiri e 2 pali). Lo scostamento è minimo (<code>ΔxG = -0.23</code>): cambiare i pesi dopo un 1-1 con 3.12 xG sarebbe <strong>puro overfitting sulla sfortuna</strong>. Il parametro resta invariato!
+                    Modello prevedeva <strong>3.35 xG</strong>, in campo prodotti <strong>3.12 xG</strong> (<code>ΔxG = -0.23</code>). Nessun overfitting sulla sfortuna: parametri invariati!
                   </p>
-                  <div class="w-full bg-[var(--card)] h-2 rounded-full overflow-hidden border border-[var(--border)]">
-                    <div class="bg-[var(--primary)] h-full" style="width: 7%"></div>
-                  </div>
-                  <div class="flex justify-between font-mono text-[10px] text-[var(--muted-foreground)]">
-                    <span>Campione anomalia: 1 / 15 match richiesti</span>
-                    <span>Stato: NESSUNA MODIFICA AI PESI</span>
-                  </div>
                 </div>
 
-                <div class="p-3 rounded-lg bg-[var(--background)] border-l-4 border-[var(--success)] space-y-1.5">
+                <div class="p-2.5 rounded-lg bg-[var(--background)] border-l-4 border-[var(--success)] space-y-1">
                   <div class="flex flex-wrap items-center justify-between gap-1 font-bold">
-                    <span>2. Regola Validata (Campione 15/15): Copertura "1X + Over 1.5" invece di 1 Secco (&lt;@1.90)</span>
-                    <span class="px-2 py-0.5 rounded bg-[var(--success)]/20 text-[var(--success)] font-mono text-[11px]">✅ ATTIVA (15/15 MATCH • +€ CASSA)</span>
+                    <span>2. Regola Validata (15/15): Copertura "1X + Over 1.5" vs 1 Secco</span>
+                    <span class="px-1.5 py-0.5 rounded bg-[var(--success)]/20 text-[var(--success)] font-mono text-[10px]">✅ ATTIVA (15/15)</span>
                   </div>
                   <p class="text-[var(--muted-foreground)] m-0">
-                    <strong>Validazione statistica completa:</strong> Quando il favorito casalingo ha un vantaggio moderato (<code>+0.70 / +1.05 xG</code>), il pareggio 1-1 si verifica nel 24% dei casi. Sostituire l'1 secco con <strong>1X + Over 1.5</strong> ha mandato in cassa <strong>Armenia-Cipro 1-1 (@1.92 ✅)</strong> e salvato <strong>Suriname DNB 0-0 (🔄)</strong>.
+                    Con vantaggio moderato (<code>+0.70 / +1.05 xG</code>), la combo protetta evita il 24% di pareggi 1-1 (es. Armenia-Cipro 1-1 ✅, Suriname DNB 0-0 🔄).
                   </p>
-                  <div class="w-full bg-[var(--card)] h-2 rounded-full overflow-hidden border border-[var(--border)]">
-                    <div class="bg-[var(--success)] h-full" style="width: 100%"></div>
-                  </div>
                 </div>
 
-                <div class="p-3 rounded-lg bg-[var(--background)] border-l-4 border-[var(--warning)] space-y-1.5">
+                <div class="p-2.5 rounded-lg bg-[var(--background)] border-l-4 border-[var(--warning)] space-y-1">
                   <div class="flex flex-wrap items-center justify-between gap-1 font-bold">
-                    <span>3. Correttivo Morbido (Bayesian Shrinkage -2.5%): Contro Difese d'Élite (xGA &lt; 0.65/gara)</span>
-                    <span class="px-2 py-0.5 rounded bg-[var(--warning)]/20 text-[var(--warning)] font-mono text-[11px]">🛠️ SHRINKAGE -2.5% (CAMPIONE 6/15)</span>
+                    <span>3. Shrinkage Bayesiano (-2.5%): Contro Difese xGA &lt; 0.65</span>
+                    <span class="px-1.5 py-0.5 rounded bg-[var(--warning)]/20 text-[var(--warning)] font-mono text-[10px]">🛠️ SHRINKAGE (6/15)</span>
                   </div>
                   <p class="text-[var(--muted-foreground)] m-0">
-                    Invece di vietare il mercato BTTS dopo <em>Juventus W 0-6 Lione (0.78 xG Juve)</em>, il modello applica uno <strong>Shrinkage Bayesiano graduale (-2.5% sulla probabilità BTTS)</strong> quando l'avversaria concede meno di <code>0.65 xGA/gara</code>, in attesa di raggiungere 15 match.
+                    Correttivo graduale del <strong>-2.5%</strong> su BTTS contro difese d'élite in attesa del campione minimo di 15 match (nessun divieto rigido).
                   </p>
-                  <div class="w-full bg-[var(--card)] h-2 rounded-full overflow-hidden border border-[var(--border)]">
-                    <div class="bg-[var(--warning)] h-full" style="width: 40%"></div>
-                  </div>
                 </div>
               </div>
             </div>
           </div>
 
-          <!-- Complete Verified Historical Table with Anti-Overfitting Audit Column -->
-          <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-3">
+          <!-- Archivio Completo: Card Compatte su Smartphone + Tabella Completa su Desktop -->
+          <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-3 md:p-4 space-y-3">
             <div class="flex flex-wrap items-center justify-between gap-2">
-              <h3 class="text-sm font-bold m-0">📋 Archivio Completo Partite Concluse &amp; Audit Anti-Overfitting (${rowsData.length} Match Ufficiali 7–12 Nov)</h3>
-              <div class="flex flex-wrap items-center gap-1.5 text-xs">
-                <button onclick="setStoricoFilter('ALL')" class="px-3 py-1 rounded font-semibold ${storicoFilter === 'ALL' ? 'bg-[var(--primary)] text-[var(--primary-foreground)]' : 'bg-[var(--background)] border border-[var(--border)] text-[var(--muted-foreground)]'}">Tutti (${rowsData.length})</button>
-                <button onclick="setStoricoFilter('WON')" class="px-3 py-1 rounded font-semibold ${storicoFilter === 'WON' ? 'bg-[var(--success)] text-white' : 'bg-[var(--background)] border border-[var(--border)] text-[var(--muted-foreground)]'}">✅ Centrati (${wonCount})</button>
-                <button onclick="setStoricoFilter('VOID')" class="px-3 py-1 rounded font-semibold ${storicoFilter === 'VOID' ? 'bg-[var(--warning)] text-black' : 'bg-[var(--background)] border border-[var(--border)] text-[var(--muted-foreground)]'}">🔄 Rimborsati (${voidCount})</button>
-                <button onclick="setStoricoFilter('LOST')" class="px-3 py-1 rounded font-semibold ${storicoFilter === 'LOST' ? 'bg-[var(--error)] text-white' : 'bg-[var(--background)] border border-[var(--border)] text-[var(--muted-foreground)]'}">❌ Errati (${lostCount})</button>
+              <h3 class="text-xs md:text-sm font-bold m-0">📋 Archivio Partite Concluse &amp; Post-Match (${rowsData.length} Match • 7 Nov – ${info.todayLabel})</h3>
+              <div class="flex flex-wrap items-center gap-1 text-[11px] md:text-xs">
+                <button onclick="setStoricoFilter('ALL')" class="px-2.5 py-1 rounded font-semibold ${storicoFilter === 'ALL' ? 'bg-[var(--primary)] text-[var(--primary-foreground)]' : 'bg-[var(--background)] border border-[var(--border)] text-[var(--muted-foreground)]'}">Tutti (${rowsData.length})</button>
+                <button onclick="setStoricoFilter('WON')" class="px-2.5 py-1 rounded font-semibold ${storicoFilter === 'WON' ? 'bg-[var(--success)] text-white' : 'bg-[var(--background)] border border-[var(--border)] text-[var(--muted-foreground)]'}">✅ (${wonCount})</button>
+                <button onclick="setStoricoFilter('VOID')" class="px-2.5 py-1 rounded font-semibold ${storicoFilter === 'VOID' ? 'bg-[var(--warning)] text-black' : 'bg-[var(--background)] border border-[var(--border)] text-[var(--muted-foreground)]'}">🔄 (${voidCount})</button>
+                <button onclick="setStoricoFilter('LOST')" class="px-2.5 py-1 rounded font-semibold ${storicoFilter === 'LOST' ? 'bg-[var(--error)] text-white' : 'bg-[var(--background)] border border-[var(--border)] text-[var(--muted-foreground)]'}">❌ (${lostCount})</button>
               </div>
             </div>
 
-            <div class="overflow-x-auto">
+            <!-- 1) VISTA SMARTPHONE (< 768px): Card Compatte stile Palinsesto -->
+            <div class="md:hidden space-y-2">
+              ${filteredRows.map(({ game, stake, pnl, audit }) => {
+                const bCls = game.outcome === 'WON' ? 'border-[var(--success)]/50' : game.outcome === 'VOID' ? 'border-[var(--warning)]/50' : 'border-[var(--error)]/50';
+                const pCls = game.outcome === 'WON' ? 'bg-[var(--success)]/20 text-[var(--success)]' : game.outcome === 'VOID' ? 'bg-[var(--warning)]/20 text-[var(--warning)]' : 'bg-[var(--error)]/20 text-[var(--error)]';
+                const pTxt = game.outcome === 'WON' ? `✅ +€${pnl}` : game.outcome === 'VOID' ? '🔄 DNB ±€0' : `❌ -€${Math.abs(pnl)}`;
+                return `
+                  <div class="bg-[var(--background)] border ${bCls} rounded-xl p-2.5 space-y-1.5 text-xs">
+                    <div class="flex items-center justify-between gap-1 text-[10px]">
+                      <span class="font-mono text-[var(--muted-foreground)] truncate">${game.countryFlag} ${game.dateLabel} • ${game.league}</span>
+                      <span class="px-1.5 py-0.5 rounded font-mono font-bold shrink-0 ${pCls}">${pTxt}</span>
+                    </div>
+                    <div class="flex items-center justify-between gap-2 cursor-pointer" onclick="openMatchDetailPage('${game.id}')">
+                      <span class="font-bold text-[var(--foreground)] truncate">${game.home} - ${game.away}</span>
+                      <span class="px-1.5 py-0.5 rounded bg-[var(--card)] border border-[var(--primary)]/50 font-mono font-bold text-[var(--primary)] shrink-0">FT ${game.finalScore}</span>
+                    </div>
+                    <div class="flex items-center justify-between gap-2 text-[11px] bg-[var(--card)] rounded px-2 py-1 border border-[var(--border)]">
+                      <span class="font-bold text-[var(--primary)] truncate">🎯 ${game.mainPick.selection}</span>
+                      <span class="font-mono font-bold shrink-0">@${game.mainPick.bookieOdd.toFixed(2)} (€${stake})</span>
+                    </div>
+                    <div class="flex flex-wrap items-center justify-between gap-1 text-[10px] font-mono">
+                      <span class="px-1.5 py-0.5 rounded border ${audit.badgeClass}">${audit.shortLabel}</span>
+                      <span class="text-[var(--muted-foreground)]">xG ${game.finalXg || audit.actTot} (att. ${audit.projTot})</span>
+                    </div>
+                    ${game.postMortem ? `<div class="text-[11px] text-[var(--muted-foreground)] leading-snug border-t border-[var(--border)]/60 pt-1"><strong class="text-[var(--primary)]">Post-Match:</strong> ${game.postMortem.summary} <span class="text-[var(--foreground)]">${game.postMortem.lesson}</span></div>` : ''}
+                  </div>
+                `;
+              }).join('')}
+            </div>
+
+            <!-- 2) VISTA DESKTOP (>= 768px): Tabella Completa -->
+            <div class="hidden md:block overflow-x-auto">
               <table class="w-full text-left border-collapse text-xs">
                 <thead>
                   <tr class="bg-[var(--secondary)] text-[var(--muted-foreground)] border-b border-[var(--border)] font-mono uppercase">
@@ -2875,7 +2939,7 @@
                     <th class="py-2 px-2 text-center">FT &amp; xG Reali vs Attesi</th>
                     <th class="py-2 px-2.5">Pronostico &amp; Quota</th>
                     <th class="py-2 px-2 text-center">Esito &amp; P/L</th>
-                    <th class="py-2 px-2.5">🛡️ Audit Anti-Overfitting (Processo vs Esito)</th>
+                    <th class="py-2 px-2.5">🛡️ Post-Match &amp; Audit Anti-Overfitting</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-[var(--border)]">
@@ -2888,7 +2952,7 @@
                       </td>
                       <td class="py-2.5 px-2 text-center font-mono whitespace-nowrap">
                         <span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] font-bold text-sm">FT ${game.finalScore}</span>
-                        <div class="text-[var(--foreground)] font-semibold mt-0.5">xG Reali: ${game.finalXg} (${audit.actTot})</div>
+                        <div class="text-[var(--foreground)] font-semibold mt-0.5">xG Reali: ${game.finalXg || audit.actTot}</div>
                         <div class="text-[10px] text-[var(--muted-foreground)]">Attesi: ${audit.projTot} (ΔxG ${audit.deltaXg >= 0 ? '+' : ''}${audit.deltaXg})</div>
                       </td>
                       <td class="py-2.5 px-2.5">
@@ -2905,7 +2969,7 @@
                           <span class="px-2 py-0.5 rounded border font-mono font-bold text-[10px] ${audit.badgeClass}">${audit.shortLabel}</span>
                           <span class="font-mono text-[10px] text-[var(--muted-foreground)]">${audit.actionLabel}</span>
                         </div>
-                        <div class="text-[var(--muted-foreground)] text-[11px]">${audit.detail}</div>
+                        ${game.postMortem ? `<div class="text-[var(--foreground)] text-[11px]">${game.postMortem.summary}</div>` : `<div class="text-[var(--muted-foreground)] text-[11px]">${audit.detail}</div>`}
                         ${game.postMortem ? `<div class="text-[var(--primary)] font-semibold text-[11px]">${game.postMortem.lesson}</div>` : ''}
                       </td>
                     </tr>

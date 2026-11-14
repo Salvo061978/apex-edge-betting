@@ -3883,8 +3883,8 @@
 
       if (previousSelectedId && LIVE_MATCHES.some(m => m.id === previousSelectedId)) {
         selectedLiveId = previousSelectedId;
-      } else if (!selectedLiveId && LIVE_MATCHES.length > 0) {
-        selectedLiveId = LIVE_MATCHES[0].id;
+      } else {
+        selectedLiveId = null;
       }
       saveUiState();
       updateLiveHeaderCounts();

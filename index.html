@@ -1698,6 +1698,10 @@
       if (!cfg.enabled || !cfg.botToken || !cfg.chatId) return false;
       if (snap._tgSending) return false;
       snap._tgSending = true;
+      const matchId = m?.id || String(snap.id || '').replace(/^snap-/, '');
+      const queryMatch = m ? `${m.home} ${m.away}` : String(snap.match || '').replace(/\s*-\s*/g, ' ');
+      const apexLiveUrl = `https://salvo061978.github.io/apex-edge-betting/#live=${encodeURIComponent(matchId)}`;
+      const betfairUrl = `https://www.betfair.it/exchange/plus/it/search?query=${encodeURIComponent(queryMatch.trim())}`;
       const msg = [
         `🟢🔥 <b>ENTRA ORA • SEMAFORO VERDE (${snap.triggerScore}/100)</b>`,
         `⚽ <b>${snap.match}</b> (${snap.league})`,
@@ -1708,7 +1712,8 @@
         `📈 Telemetria: ${snap.statsAtTrigger}`,
         `🔗 Pre-Match: ${snap.preMatchConvergence}`,
         '',
-        '🔗 <a href="https://salvo061978.github.io/apex-edge-betting/">Apri Betfair & Dettaglio Live</a>'
+        `📲 <a href="${apexLiveUrl}">Apri Partita Live su APEX EDGE</a>`,
+        `🟡 <a href="${betfairUrl}">Apri Scommessa su Betfair Exchange</a>`
       ].join('\n');
       const res = await sendTelegramMessage(msg, cfg);
       snap._tgSending = false;
@@ -4605,6 +4610,13 @@
 
     window.addEventListener('DOMContentLoaded', () => {
       loadUiState();
+      if (window.location.hash && window.location.hash.startsWith('#live=')) {
+        const targetLiveId = decodeURIComponent(window.location.hash.slice(6));
+        if (targetLiveId) {
+          currentPage = 'live';
+          selectedLiveId = targetLiveId;
+        }
+      }
       updateDynamicDayButtons();
       setDayFilter(selectedDay);
       setLeagueFilter(selectedLeague);

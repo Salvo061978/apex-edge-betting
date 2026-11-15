@@ -3594,7 +3594,11 @@
           }
         }
       }
-      if (changed && currentPage === 'palinsesto') renderPalinsesto();
+      if (changed) {
+        if (currentPage === 'palinsesto') renderPalinsesto();
+        if (currentPage === 'storico') renderStoricoPage();
+        renderBetSlip();
+      }
     }
 
     const _palinsestoLastSync = {};
@@ -4410,11 +4414,14 @@
           if (g.liveStatus === 'IN_PLAY' && g.liveScore) {
             return { state: 'LIVE', badge: `🔴 ${g.liveMinute}' (${g.liveScore})`, cls: 'bg-[var(--error)]/15 text-[var(--error)] border-[var(--error)]/40' };
           }
-          if (g.settled === 'WON') {
+          if (g.outcome === 'WON') {
             return { state: 'WON', badge: `✅ PRESA${g.finalScore ? ' • FT ' + g.finalScore : ''}`, cls: 'bg-[var(--success)]/15 text-[var(--success)] border-[var(--success)]/40' };
           }
-          if (g.settled === 'LOST') {
+          if (g.outcome === 'LOST') {
             return { state: 'LOST', badge: `❌ PERSA${g.finalScore ? ' • FT ' + g.finalScore : ''}`, cls: 'bg-[var(--error)]/15 text-[var(--error)] border-[var(--error)]/40' };
+          }
+          if (g.outcome === 'VOID') {
+            return { state: 'VOID', badge: `⚪ RIMBORSATA${g.finalScore ? ' • FT ' + g.finalScore : ''}`, cls: 'bg-[var(--secondary)] text-[var(--foreground)] border-[var(--border)]' };
           }
           return { state: 'PENDING', badge: `⏳ ${g.kickoff || 'In attesa'}`, cls: 'bg-[var(--secondary)] text-[var(--muted-foreground)] border-[var(--border)]' };
         }
@@ -4540,8 +4547,12 @@
       syncRealLiveMatchesFromFotmob(true);
 
       const info = getDynamicDateInfo();
+      const twoDaysAgoDate = new Date();
+      twoDaysAgoDate.setDate(twoDaysAgoDate.getDate() - 2);
+      const twoDaysAgoIso = `${twoDaysAgoDate.getFullYear()}-${String(twoDaysAgoDate.getMonth() + 1).padStart(2, '0')}-${String(twoDaysAgoDate.getDate()).padStart(2, '0')}`;
       syncPalinsestoForDate(info.todayIso, true);
       syncPalinsestoForDate(info.yesterdayIso, true);
+      syncPalinsestoForDate(twoDaysAgoIso, true);
       setInterval(() => {
         if (currentPage === 'palinsesto') {
           const activeIso = getIsoDateForSelectedDay(selectedDay) || getDynamicDateInfo().todayIso;

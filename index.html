@@ -274,6 +274,9 @@
               <button onclick="syncRealLiveMatchesFromFotmob(true)" class="px-3 py-1.5 rounded-lg text-[11px] md:text-xs font-bold bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90 transition">
                 🔄 Aggiorna Ora
               </button>
+              <button id="btn-restore-dismissed-live" onclick="restoreDismissedLiveMatches()" class="hidden px-2.5 py-1.5 rounded-lg text-[11px] md:text-xs font-bold bg-[var(--secondary)] border border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)] transition">
+                👁️ Ripristina Nascoste
+              </button>
             </div>
           </div>
 
@@ -3958,10 +3961,31 @@
       if (selectedLiveId === liveId) selectedLiveId = null;
       saveUiState();
       updateLiveHeaderCounts();
+      updateRestoreDismissedButton();
       renderLiveAccordion();
     }
 
+    function updateRestoreDismissedButton() {
+      const btn = document.getElementById('btn-restore-dismissed-live');
+      if (!btn) return;
+      let count = 0;
+      try { count = JSON.parse(localStorage.getItem('apex_dismissed_live_ids') || '[]').length; } catch (_) {}
+      if (count > 0) {
+        btn.classList.remove('hidden');
+        btn.textContent = `👁️ Ripristina (${count})`;
+      } else {
+        btn.classList.add('hidden');
+      }
+    }
+
+    function restoreDismissedLiveMatches() {
+      try { localStorage.removeItem('apex_dismissed_live_ids'); } catch (_) {}
+      updateRestoreDismissedButton();
+      syncRealLiveMatchesFromFotmob(true);
+    }
+
     function renderLiveAccordion() {
+      updateRestoreDismissedButton();
       const container = document.getElementById('live-accordion-list');
       if (!container) return;
 

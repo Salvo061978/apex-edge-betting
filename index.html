@@ -3832,14 +3832,16 @@
             autoGradePalinsestoFromLiveFeed(events);
             autoGradeLiveSignalsHistory(events);
 
+            const dismissedLive = (() => { try { return new Set(JSON.parse(localStorage.getItem('apex_dismissed_live_ids') || '[]')); } catch (_) { return new Set(); } })();
             for (const ev of events) {
+              if (dismissedLive.has(`live-real-${ev.id}`)) continue;
               const comp = (ev.competitions && ev.competitions[0]) || {};
               const stType = comp.status?.type || ev.status?.type || {};
               const state = stType.state;
               const statusText = `${stType.name || ''} ${stType.shortDetail || ''} ${stType.detail || ''}`.toUpperCase();
-              const isActuallyDone = Boolean(stType.completed) || /\b(FT|FINAL|FULL_TIME|AET|PEN|POSTPONED|CANCELED|CANCELLED|ABANDONED|SUSPENDED)\b/.test(statusText);
+              const isActuallyDone = Boolean(stType.completed) || /\b(FT|FINAL|FULL_TIME|END|ENDED|AET|PEN|POSTPONED|CANCELED|CANCELLED|ABANDONED|SUSPENDED|DELAYED|INTERRUPTED|FORFEIT)\b/.test(statusText);
               const kickoffMs = Date.parse(ev.date || comp.date || '');
-              const isStaleZombie = Number.isFinite(kickoffMs) && (Date.now() - kickoffMs > 3.5 * 3600 * 1000);
+              const isStaleZombie = Number.isFinite(kickoffMs) && (Date.now() - kickoffMs > 2.25 * 3600 * 1000);
               if (state === 'in' && !isActuallyDone && !isStaleZombie) {
                 const competitors = comp.competitors || [];
                 const homeComp = competitors.find(c => c.homeAway === 'home') || competitors[0] || {};
@@ -3945,6 +3947,20 @@
       renderLiveAccordion();
     }
 
+    function dismissLiveMatch(liveId) {
+      try {
+        const arr = JSON.parse(localStorage.getItem('apex_dismissed_live_ids') || '[]');
+        if (!arr.includes(liveId)) arr.push(liveId);
+        localStorage.setItem('apex_dismissed_live_ids', JSON.stringify(arr.slice(-50)));
+      } catch (_) {}
+      const idx = LIVE_MATCHES.findIndex(m => m.id === liveId);
+      if (idx >= 0) LIVE_MATCHES.splice(idx, 1);
+      if (selectedLiveId === liveId) selectedLiveId = null;
+      saveUiState();
+      updateLiveHeaderCounts();
+      renderLiveAccordion();
+    }
+
     function renderLiveAccordion() {
       const container = document.getElementById('live-accordion-list');
       if (!container) return;
@@ -4032,7 +4048,10 @@
                 </div>
                 <div class="flex items-center justify-between md:justify-end gap-2 w-full md:w-auto">
                   ${topSig ? `<span class="px-2 py-0.5 rounded bg-[var(--primary)]/20 text-[var(--primary)] font-bold">Target ≥ @${Math.max(topSig.minBetfairOdd, topSig.minOperationalOdd || 1.50).toFixed(2)}</span>` : '<span></span>'}
-                  <span class="px-2.5 py-0.5 rounded bg-[var(--secondary)] text-[var(--foreground)] font-bold shrink-0">${isOpen ? '▲ Chiudi' : '▼ Apri'}</span>
+                  <div class="flex items-center gap-1.5 shrink-0">
+                    <span class="px-2.5 py-0.5 rounded bg-[var(--secondary)] text-[var(--foreground)] font-bold">${isOpen ? '▲ Chiudi' : '▼ Apri'}</span>
+                    <button type="button" onclick="event.stopPropagation(); dismissLiveMatch('${m.id}')" title="Nascondi partita bloccata" class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--error)] hover:border-[var(--error)] font-bold">✕</button>
+                  </div>
                 </div>
               </div>
             </div>

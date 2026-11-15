@@ -2763,11 +2763,21 @@
       const liveWon = liveTriggered.filter(s => s.outcome === 'WON').length;
       const liveWinRate = liveTriggered.length > 0 ? ((liveWon / liveTriggered.length) * 100).toFixed(1) : '0.0';
 
+      const parseStoricoDateKey = (lbl) => {
+        const m = String(lbl || '').match(/(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?/);
+        if (!m) return 0;
+        return parseInt(m[3] || new Date().getFullYear(), 10) * 10000 + parseInt(m[2], 10) * 100 + parseInt(m[1], 10);
+      };
+
       const filteredRows = rowsData.filter(r => {
         if (storicoFilter === 'WON') return r.game.outcome === 'WON';
         if (storicoFilter === 'LOST') return r.game.outcome === 'LOST';
         if (storicoFilter === 'VOID') return r.game.outcome === 'VOID';
         return true;
+      }).sort((a, b) => {
+        const dDiff = parseStoricoDateKey(b.game.dateLabel) - parseStoricoDateKey(a.game.dateLabel);
+        if (dDiff !== 0) return dDiff;
+        return (b.game.order || 0) - (a.game.order || 0);
       });
 
       container.innerHTML = `
@@ -2937,53 +2947,43 @@
               }).join('')}
             </div>
 
-            <!-- 2) VISTA DESKTOP (>= 768px): Tabella Completa -->
-            <div class="hidden md:block overflow-x-auto">
-              <table class="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr class="bg-[var(--secondary)] text-[var(--muted-foreground)] border-b border-[var(--border)] font-mono uppercase">
-                    <th class="py-2 px-2.5">Data</th>
-                    <th class="py-2 px-2.5">Partita</th>
-                    <th class="py-2 px-2 text-center">FT &amp; xG Reali vs Attesi</th>
-                    <th class="py-2 px-2.5">Pronostico &amp; Quota</th>
-                    <th class="py-2 px-2 text-center">Esito &amp; P/L</th>
-                    <th class="py-2 px-2.5">🛡️ Post-Match &amp; Audit Anti-Overfitting</th>
-                  </tr>
-                </thead>
-                <tbody class="divide-y divide-[var(--border)]">
-                  ${filteredRows.map(({ game, stake, pnl, audit }) => `
-                    <tr class="hover:bg-[var(--background)]/60">
-                      <td class="py-2.5 px-2.5 font-mono whitespace-nowrap">${game.dateLabel}</td>
-                      <td class="py-2.5 px-2.5">
-                        <div class="font-bold text-[var(--foreground)] cursor-pointer hover:text-[var(--primary)]" onclick="openMatchDetailPage('${game.id}')">${game.countryFlag} ${game.home} - ${game.away}</div>
-                        <div class="text-[var(--muted-foreground)]">${game.competitionDetail}</div>
-                      </td>
-                      <td class="py-2.5 px-2 text-center font-mono whitespace-nowrap">
-                        <span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] font-bold text-sm">FT ${game.finalScore}</span>
-                        <div class="text-[var(--foreground)] font-semibold mt-0.5">xG Reali: ${game.finalXg || audit.actTot}</div>
-                        <div class="text-[10px] text-[var(--muted-foreground)]">Attesi: ${audit.projTot} (ΔxG ${audit.deltaXg >= 0 ? '+' : ''}${audit.deltaXg})</div>
-                      </td>
-                      <td class="py-2.5 px-2.5">
-                        <div class="font-bold text-[var(--primary)]">${game.mainPick.selection}</div>
-                        <div class="font-mono text-[var(--muted-foreground)]">@${game.mainPick.bookieOdd.toFixed(2)} • Stake €${stake}</div>
-                      </td>
-                      <td class="py-2.5 px-2 text-center font-mono whitespace-nowrap">
-                        <span class="px-2 py-1 rounded font-bold ${game.outcome === 'WON' ? 'bg-[var(--success)]/20 text-[var(--success)]' : game.outcome === 'VOID' ? 'bg-[var(--warning)]/20 text-[var(--warning)]' : 'bg-[var(--error)]/20 text-[var(--error)]'}">
-                          ${game.outcome === 'WON' ? '✅ +' + pnl + '€' : game.outcome === 'VOID' ? '🔄 ±0€ (DNB)' : '❌ ' + pnl + '€'}
-                        </span>
-                      </td>
-                      <td class="py-2.5 px-2.5 max-w-md space-y-1">
-                        <div class="flex flex-wrap items-center gap-1.5">
-                          <span class="px-2 py-0.5 rounded border font-mono font-bold text-[10px] ${audit.badgeClass}">${audit.shortLabel}</span>
-                          <span class="font-mono text-[10px] text-[var(--muted-foreground)]">${audit.actionLabel}</span>
-                        </div>
-                        ${game.postMortem ? `<div class="text-[var(--foreground)] text-[11px]">${game.postMortem.summary}</div>` : `<div class="text-[var(--muted-foreground)] text-[11px]">${audit.detail}</div>`}
-                        ${game.postMortem ? `<div class="text-[var(--primary)] font-semibold text-[11px]">${game.postMortem.lesson}</div>` : ''}
-                      </td>
-                    </tr>
-                  `).join('')}
-                </tbody>
-              </table>
+            <!-- 2) VISTA DESKTOP (>= 768px): Schede Orizzontali Compatte (Zero Overflow) -->
+            <div class="hidden md:block space-y-2.5">
+              ${filteredRows.map(({ game, stake, pnl, audit }) => {
+                const bCls = game.outcome === 'WON' ? 'border-[var(--success)]/40' : game.outcome === 'VOID' ? 'border-[var(--warning)]/40' : 'border-[var(--error)]/40';
+                const pCls = game.outcome === 'WON' ? 'bg-[var(--success)]/20 text-[var(--success)]' : game.outcome === 'VOID' ? 'bg-[var(--warning)]/20 text-[var(--warning)]' : 'bg-[var(--error)]/20 text-[var(--error)]';
+                const pTxt = game.outcome === 'WON' ? `✅ +${pnl}€` : game.outcome === 'VOID' ? '🔄 ±0€ (DNB)' : `❌ ${pnl}€`;
+                return `
+                  <div class="bg-[var(--background)] border ${bCls} rounded-xl p-3 space-y-2 text-xs hover:border-[var(--primary)]/50 transition">
+                    <div class="grid grid-cols-12 items-center gap-2">
+                      <div class="col-span-4 min-w-0">
+                        <div class="font-mono text-[10px] text-[var(--muted-foreground)] truncate">${game.dateLabel} • ${game.league}</div>
+                        <div class="font-bold text-sm text-[var(--foreground)] truncate cursor-pointer hover:text-[var(--primary)]" onclick="openMatchDetailPage('${game.id}')">${game.countryFlag} ${game.home} - ${game.away}</div>
+                      </div>
+                      <div class="col-span-3 text-center font-mono">
+                        <span class="px-2 py-0.5 rounded bg-[var(--card)] border border-[var(--border)] font-bold text-xs">FT ${game.finalScore}</span>
+                        <div class="text-[10px] text-[var(--muted-foreground)] mt-0.5">xG ${game.finalXg || audit.actTot} <span class="opacity-75">(att. ${audit.projTot})</span></div>
+                      </div>
+                      <div class="col-span-3 min-w-0">
+                        <div class="font-bold text-[var(--primary)] truncate">🎯 ${game.mainPick.selection}</div>
+                        <div class="font-mono text-[11px] text-[var(--muted-foreground)]">@${game.mainPick.bookieOdd.toFixed(2)} • Stake €${stake}</div>
+                      </div>
+                      <div class="col-span-2 text-right font-mono">
+                        <span class="inline-block px-2 py-1 rounded font-bold whitespace-nowrap ${pCls}">${pTxt}</span>
+                      </div>
+                    </div>
+                    <div class="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-[var(--border)]/60 text-[11px]">
+                      <div class="flex items-center gap-1.5 shrink-0">
+                        <span class="px-2 py-0.5 rounded border font-mono font-bold text-[10px] ${audit.badgeClass}">${audit.shortLabel}</span>
+                        <span class="font-mono text-[10px] text-[var(--muted-foreground)]">${audit.actionLabel}</span>
+                      </div>
+                      <div class="text-[var(--muted-foreground)] flex-1 min-w-0">
+                        ${game.postMortem ? `<span class="text-[var(--foreground)]">${game.postMortem.summary}</span> <strong class="text-[var(--primary)]">${game.postMortem.lesson}</strong>` : audit.detail}
+                      </div>
+                    </div>
+                  </div>
+                `;
+              }).join('')}
             </div>
           </div>
         `}

@@ -3117,12 +3117,14 @@
       } else if (min >= 44 && min <= 53) {
         timePts = 16;
         windowLabel = `⏳ Intervallo / Inizio 2°T (${min}' • Attendi il 54')`;
-      } else if (min >= 54 && min <= 80) {
-        timePts = 30;
-        windowLabel = `🟢🔥 Finestra Regina 2°T (${min}' • Massima resa Betfair)`;
-      } else if (min > 80) {
-        timePts = 14;
-        windowLabel = `⚠️ Finale Gara (${min}' • Varianza alta, riduci stake)`;
+      } else if (min >= 54 && min <= 82) {
+        timePts = min <= 78 ? 30 : 22;
+        windowLabel = min <= 78
+          ? `🟢🔥 Finestra Regina 2°T (${min}' • Massima resa Betfair)`
+          : `⚠️ Zona Limite 2°T (${min}' • Ultimi minuti utili prima del blocco all'83')`;
+      } else if (min > 82) {
+        timePts = 0;
+        windowLabel = `🛑 Finale Gara (${min}' > 82': Troppo tardi, no-bet)`;
       } else {
         timePts = 18;
         windowLabel = `⏱️ Minuto ${min}'`;
@@ -3147,7 +3149,26 @@
 
       const score = Math.min(99, Math.max(8, timePts + deficitPts + pressurePts + convPts));
 
-      if (min >= 25 && score >= 72 && totalSot >= 4) {
+      // Blocco rigido oltre l'82': mai aprire un nuovo segnale al 83'-90'+ (varianza/azzardo puro)
+      if (min > 82) {
+        return {
+          status: 'NO_BET',
+          score: Math.min(score, 45),
+          windowLabel,
+          xgDeficit,
+          badgeText: `⚪🛑 FINALE GARA (${min}'): NO-BET (OLTRE LIMITE 82')`,
+          badgeClass: 'bg-[var(--secondary)] text-[var(--muted-foreground)] border-[var(--border)]',
+          actionAdvice: `Partita al ${min}' (oltre la soglia massima dell'82'): anche con xG alti, restano troppi pochi minuti effettivi. Ingresso bloccato per evitare giocate d'azzardo nel recupero.`,
+          checklist: [
+            { ok: false, label: `Finestra Chiusa (${min}' > 82')` },
+            { ok: xgDeficit >= 0.4, label: `Deficit xG (+${xgDeficit})` },
+            { ok: totalSot >= 4, label: `Pressione (${totalShotsBox} area, ${totalSot} porta)` },
+            { ok: preMatchInfo.matched, label: preMatchInfo.matched ? 'Pre-Match Collegato' : 'Solo Live' }
+          ]
+        };
+      }
+
+      if (min >= 25 && min <= 82 && score >= 72 && totalSot >= 4) {
         return {
           status: 'ENTER_NOW',
           score,
@@ -3157,7 +3178,7 @@
           badgeClass: 'bg-[var(--success)]/20 text-[var(--success)] border-[var(--success)]',
           actionAdvice: `TUTTI I PARAMETRI ALLINEATI AL ${min}': ${windowLabel} + Deficit xG +${xgDeficit} + ${totalShotsBox} Tiri in Area (${totalSot} nello specchio). Entra adesso se la quota Punta su Betfair rispetta la Quota Minima!`,
           checklist: [
-            { ok: true, label: `Finestra Minuto Ideale (${min}')` },
+            { ok: true, label: `Finestra Minuto Valida (${min}' ≤ 82')` },
             { ok: true, label: `Deficit xG Maturo (+${xgDeficit} xG non convertiti)` },
             { ok: true, label: `Pressione Area (${totalShotsBox} tiri area, ${totalSot} in porta)` },
             { ok: preMatchInfo.matched, label: preMatchInfo.matched ? 'Convergenza Pre-Match Attiva' : 'Segnale Statistico Live Puro' }

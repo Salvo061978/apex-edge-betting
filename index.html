@@ -3834,8 +3834,13 @@
 
             for (const ev of events) {
               const comp = (ev.competitions && ev.competitions[0]) || {};
-              const state = comp.status?.type?.state || ev.status?.type?.state;
-              if (state === 'in') {
+              const stType = comp.status?.type || ev.status?.type || {};
+              const state = stType.state;
+              const statusText = `${stType.name || ''} ${stType.shortDetail || ''} ${stType.detail || ''}`.toUpperCase();
+              const isActuallyDone = Boolean(stType.completed) || /\b(FT|FINAL|FULL_TIME|AET|PEN|POSTPONED|CANCELED|CANCELLED|ABANDONED|SUSPENDED)\b/.test(statusText);
+              const kickoffMs = Date.parse(ev.date || comp.date || '');
+              const isStaleZombie = Number.isFinite(kickoffMs) && (Date.now() - kickoffMs > 3.5 * 3600 * 1000);
+              if (state === 'in' && !isActuallyDone && !isStaleZombie) {
                 const competitors = comp.competitors || [];
                 const homeComp = competitors.find(c => c.homeAway === 'home') || competitors[0] || {};
                 const awayComp = competitors.find(c => c.homeAway === 'away') || competitors[1] || {};

@@ -276,6 +276,9 @@
             </div>
 
             <div class="flex flex-wrap items-center gap-1.5">
+              <button onclick="sendLiveMatchTestToTelegram()" class="px-2.5 py-1.5 rounded-lg text-[11px] md:text-xs font-bold bg-[#38bdf8]/20 border border-[#38bdf8]/60 text-[#38bdf8] hover:bg-[#38bdf8]/30 transition flex items-center gap-1">
+                <span>📲 Invia Prova Live su Telegram</span>
+              </button>
               <button onclick="openBetfairLiveConnectorPanel()" class="px-2.5 py-1.5 rounded-lg text-[11px] md:text-xs font-bold bg-[var(--success)]/15 border border-[var(--success)]/50 text-[var(--success)] hover:bg-[var(--success)]/25 transition flex items-center gap-1">
                 <span>🎯 Collega Partita → Pronostico Betfair</span>
                 <span id="bf-header-status-pill" class="px-1.5 py-0.2 rounded text-[9px] font-mono bg-[var(--card)] border border-[var(--border)] text-[var(--muted-foreground)]">API</span>
@@ -294,6 +297,9 @@
               </button>
             </div>
           </div>
+
+          <!-- Banner di Stato Rapido Notifica Telegram / Connettore Betfair -->
+          <div id="live-tg-quick-banner" class="hidden p-2.5 rounded-lg border font-mono text-xs"></div>
 
           <!-- Legenda Semaforo Quando Scommettere (Incrocio Pre-Match + Statistiche Live) -->
           <div class="grid grid-cols-1 md:grid-cols-3 gap-2 text-[11px] md:text-xs">
@@ -386,7 +392,7 @@
               <span id="bf-vault-status" class="font-mono text-[11px] text-[var(--success)]">🔒 Nessuna credenziale presente su GitHub. Cassaforte locale pronta.</span>
               <div class="flex flex-wrap items-center gap-2">
                 <button onclick="testAndConnectBetfairFromVault()" class="px-2.5 py-1 rounded bg-[var(--warning)]/20 text-[var(--warning)] border border-[var(--warning)]/50 font-bold hover:bg-[var(--warning)]/30 transition">🎯 Test & Collega Pronostico Betfair</button>
-                <button onclick="testTelegramNotification()" class="px-2.5 py-1 rounded bg-[#38bdf8]/20 text-[#38bdf8] border border-[#38bdf8]/40 font-bold hover:bg-[#38bdf8]/30 transition">📲 Test Telegram</button>
+                <button onclick="testTelegramNotification()" class="px-2.5 py-1 rounded bg-[#38bdf8]/20 text-[#38bdf8] border border-[#38bdf8]/40 font-bold hover:bg-[#38bdf8]/30 transition">📲 Invia Prova Partita Live su Telegram</button>
                 <button onclick="saveBetfairLocalVault()" class="px-3 py-1 rounded bg-[var(--primary)] text-[var(--primary-foreground)] font-bold">💾 Salva Tutto Solo in Locale</button>
                 <button onclick="clearBetfairLocalVault()" class="px-2.5 py-1 rounded bg-[var(--error)]/20 text-[var(--error)] border border-[var(--error)]/40 font-bold">🗑️ Cancella Dati Locali</button>
               </div>
@@ -2345,21 +2351,24 @@
         if (pool.some(p => teamNamesMatch(p.home, g.home) && teamNamesMatch(p.away, g.away))) return;
         const simMatch = {
           id: `sim-${g.id}`,
+          _isPreviewOnly: true,
           home: g.home,
           away: g.away,
           league: g.league,
-          minute: 34,
-          scoreHome: 0,
-          scoreAway: 0,
+          minute: 58,
+          scoreHome: 1,
+          scoreAway: 1,
           liveStats: {
-            xgHome: +(Number(g.xgStats?.projectedHomeGoals || 1.5) * 0.45).toFixed(2),
-            xgAway: +(Number(g.xgStats?.projectedAwayGoals || 1.1) * 0.45).toFixed(2),
-            appmHome: 1.05, appmAway: 0.78,
-            dangAttacksHome: 24, dangAttacksAway: 16,
-            shotsOnTargetHome: 3, shotsOnTargetAway: 2,
-            shotsInsideBoxHome: 5, shotsInsideBoxAway: 3,
-            bigChancesHome: 1, bigChancesAway: 1,
-            cornersHome: 4, cornersAway: 2
+            xgHome: +(Number(g.xgStats?.projectedHomeGoals || 1.65) * 0.72).toFixed(2),
+            xgAway: +(Number(g.xgStats?.projectedAwayGoals || 1.25) * 0.72).toFixed(2),
+            xgLast15Home: 0.44,
+            xgLast15Away: 0.31,
+            appmHome: 1.25, appmAway: 0.92,
+            dangAttacksHome: 38, dangAttacksAway: 27,
+            shotsOnTargetHome: 5, shotsOnTargetAway: 3,
+            shotsInsideBoxHome: 8, shotsInsideBoxAway: 5,
+            bigChancesHome: 2, bigChancesAway: 2,
+            cornersHome: 6, cornersAway: 4
           },
           liveSignals: []
         };
@@ -2371,19 +2380,22 @@
           home: g.home,
           away: g.away,
           league: g.league,
-          minute: g.kickoff,
-          score: g.finalScore || '0-0',
+          minute: g.status === 'LIVE' ? '58\'' : `LIVE TEST 58' (${g.kickoff})`,
+          score: g.finalScore || '1-1',
+          xgText: `${simMatch.liveStats.xgHome.toFixed(2)} - ${simMatch.liveStats.xgAway.toFixed(2)}`,
+          sotText: `${simMatch.liveStats.shotsOnTargetHome} - ${simMatch.liveStats.shotsOnTargetAway}`,
+          semScore: simMatch.semaphore?.score || 84,
           signals: [
+            ...simMatch.liveSignals,
             {
               id: `pre-main-${g.id}`,
-              signalType: `PRONOSTICO PRE-MATCH (${g.mainPick.market})`,
+              signalType: `CONVERGENZA PRE-MATCH + LIVE (${g.mainPick.market})`,
               selection: g.mainPick.selection,
               fairOdd: g.mainPick.fairOdd,
               minBetfairOdd: g.mainPick.bookieOdd,
               minOperationalOdd: 1.50,
               liveOdd: g.mainPick.bookieOdd
-            },
-            ...simMatch.liveSignals
+            }
           ]
         });
       });
@@ -2406,7 +2418,7 @@
 
       matchSel.innerHTML = pool.map(item => `
         <option value="${item.key}">
-          ${item.isLive ? `🔴 LIVE ${item.minute} (${item.score})` : `📅 ${item.minute}`} • ${item.home} - ${item.away} (${item.league})
+          ${item.isLive ? `🔴 LIVE ${item.minute} (${item.score})` : `📡 ${item.minute} (${item.score})`} • ${item.home} - ${item.away} (${item.league})
         </option>
       `).join('');
 
@@ -2527,6 +2539,9 @@
               </a>
               <button onclick="triggerBetfairPlaceOrder()" class="px-3 py-2 rounded-lg bg-[var(--success)] text-white font-bold text-xs hover:opacity-90 transition flex items-center gap-1.5">
                 <span>🚀 3. Invia Ordine API (${spec.side} @${Number(effectiveOdd).toFixed(2)} • €${stakeEuro})</span>
+              </button>
+              <button onclick="sendLiveMatchTestToTelegram('${chosenMatch.key}', '${chosenSig.id}', false)" class="px-3 py-2 rounded-lg bg-[#38bdf8] text-black font-bold text-xs hover:opacity-90 transition flex items-center gap-1.5">
+                <span>📲 4. Invia Prova su Telegram di Questa Partita</span>
               </button>
             </div>
             <button onclick="downloadLocalBetfairBridgeScript()" class="px-2.5 py-1.5 rounded-lg bg-[var(--secondary)] border border-[var(--border)] text-[11px] font-mono text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
@@ -2729,37 +2744,147 @@
       }
     }
 
-    async function testTelegramNotification() {
+    /**
+     * Invia su Telegram una notifica completa di PROVA di una Partita Live + Pronostico Specifico + Link Diretto Betfair Exchange.
+     */
+    async function sendLiveMatchTestToTelegram(targetMatchKey = null, targetSigId = null, isAutoStartup = false) {
       saveBetfairLocalVault();
       const cfg = getTelegramLocalConfig();
       const st = document.getElementById('bf-vault-status');
-      if (!cfg.botToken || !cfg.chatId) {
-        const msgWarn = '⚠️ Token o Chat ID non presenti su questo dispositivo (il salvataggio è locale per sicurezza, non condiviso tra PC e smartphone). Reinseriscili qui e riprova.';
+      const quickBanner = document.getElementById('live-tg-quick-banner');
+
+      const setUiFeedback = (type, htmlMsg) => {
         if (st) {
-          st.className = 'text-[11px] font-mono font-bold text-[var(--warning)]';
-          st.textContent = msgWarn;
+          st.className = type === 'success'
+            ? 'text-[11px] font-mono font-bold text-[var(--success)]'
+            : type === 'warning'
+              ? 'text-[11px] font-mono font-bold text-[var(--warning)]'
+              : type === 'error'
+                ? 'text-[11px] font-mono font-bold text-[var(--error)]'
+                : 'text-[11px] font-mono text-[var(--muted-foreground)]';
+          st.innerHTML = htmlMsg;
         }
-        return;
+        if (quickBanner) {
+          quickBanner.classList.remove('hidden');
+          quickBanner.className = `p-2.5 rounded-lg border font-mono text-xs ${
+            type === 'success'
+              ? 'bg-[var(--success)]/15 border-[var(--success)]/50 text-[var(--success)]'
+              : type === 'warning'
+                ? 'bg-[var(--warning)]/15 border-[var(--warning)]/50 text-[var(--warning)]'
+                : type === 'error'
+                  ? 'bg-[var(--error)]/15 border-[var(--error)]/50 text-[var(--error)]'
+                  : 'bg-[#38bdf8]/15 border-[#38bdf8]/50 text-[#38bdf8]'
+          }`;
+          quickBanner.innerHTML = htmlMsg;
+        }
+        _bfConnectorStatusType = type === 'error' ? 'warning' : type;
+        _bfConnectorStatusMsg = htmlMsg;
+        renderBetfairConnectorDetails();
+      };
+
+      if (!cfg.botToken || !cfg.chatId) {
+        if (!isAutoStartup) {
+          const vault = document.getElementById('betfair-vault-panel');
+          if (vault) vault.classList.remove('hidden');
+          setUiFeedback('warning', '⚠️ <b>Token Bot o Chat ID Telegram non trovati su questo browser:</b> Inseriscili nel pannello <b>"🔐 Credenziali Betfair &amp; Telegram"</b> qui sotto e premi <b>📲 Invia Prova Partita Live su Telegram</b>.');
+        }
+        return { ok: false, error: 'Missing Telegram credentials' };
       }
-      if (st) {
-        st.className = 'text-[11px] font-mono text-[var(--muted-foreground)]';
-        st.textContent = '⏳ Invio messaggio di test su Telegram in corso...';
+
+      const pool = getConnectorMatchPool();
+      const matchSel = document.getElementById('bf-conn-match-select');
+      const sigSel = document.getElementById('bf-conn-sig-select');
+
+      let chosenMatch = null;
+      if (targetMatchKey) {
+        chosenMatch = pool.find(p => p.key === targetMatchKey || p.matchId === targetMatchKey);
       }
+      if (!chosenMatch && matchSel && matchSel.value) {
+        chosenMatch = pool.find(p => p.key === matchSel.value);
+      }
+      if (!chosenMatch) {
+        chosenMatch = pool[0];
+      }
+      if (!chosenMatch) return { ok: false, error: 'No match in pool' };
+
+      let chosenSig = null;
+      if (targetSigId) {
+        chosenSig = chosenMatch.signals.find(s => s.id === targetSigId);
+      }
+      if (!chosenSig && sigSel && sigSel.value) {
+        chosenSig = chosenMatch.signals.find(s => s.id === sigSel.value);
+      }
+      if (!chosenSig) {
+        chosenSig = chosenMatch.signals[0];
+      }
+
+      if (!isAutoStartup) {
+        setUiFeedback('info', `⏳ Invio notifica Telegram di prova per <b>${chosenMatch.home} vs ${chosenMatch.away}</b> → <b>${chosenSig.selection}</b>...`);
+      }
+
+      const spec = mapSelectionToBetfairSpec(chosenSig.selection, chosenMatch.home, chosenMatch.away);
+      const cacheKey = `${normalizeTeamName(chosenMatch.home)}|${normalizeTeamName(chosenMatch.away)}|${spec.marketTypeCode}|${spec.side}`;
+      let cached = BETFAIR_MARKET_CACHE[cacheKey] || null;
+
+      const bfCfg = getBetfairLocalConfig();
+      if (!cached && bfCfg.configured) {
+        try {
+          const bfRes = await resolveBetfairMarketForSignal(chosenMatch.home, chosenMatch.away, chosenSig.selection);
+          if (bfRes && bfRes.ok) cached = bfRes;
+        } catch (_) {}
+      }
+
+      const effectiveOdd = cached?.bestBackPrice && spec.side === 'BACK'
+        ? cached.bestBackPrice
+        : cached?.bestLayPrice && spec.side === 'LAY'
+          ? cached.bestLayPrice
+          : (betfairCustomOdds[chosenSig.id] || chosenSig.liveOdd || chosenSig.minBetfairOdd || 1.82);
+      const evalBf = evaluateBetfairBackOdd(effectiveOdd, chosenSig.fairOdd || 1.56);
+      const stakeEuro = Math.max(15, evalBf.kelly.euro || 25);
+
+      const directApexUrl = `https://salvo061978.github.io/apex-edge-betting/#live=${encodeURIComponent(chosenMatch.matchId)}&sig=${encodeURIComponent(chosenSig.id)}`;
+      const directBetfairUrl = cached?.directMarketUrl || 'https://www.betfair.it/exchange/plus/inplay/football';
+
+      const liveObj = LIVE_MATCHES.find(m => m.id === chosenMatch.matchId);
+      const xgDisplay = liveObj
+        ? `${liveObj.liveStats.xgHome.toFixed(2)} - ${liveObj.liveStats.xgAway.toFixed(2)}`
+        : (chosenMatch.xgText || '1.42 - 0.88');
+      const sotDisplay = liveObj
+        ? `${liveObj.liveStats.shotsOnTargetHome} - ${liveObj.liveStats.shotsOnTargetAway}`
+        : (chosenMatch.sotText || '5 - 3');
+      const semDisplay = liveObj?.semaphore?.score || chosenMatch.semScore || 84;
+
       const msg = [
-        '🟢🔥 <b>APEX EDGE • TEST NOTIFICA TELEGRAM</b>',
-        '',
-        '✅ Collegamento locale attivo sul tuo dispositivo.',
-        '📲 Riceverai un alert qui ogni volta che una partita Live raggiunge <b>SEMAFORO VERDE (ENTRA ORA ≥ 72/100)</b>.',
-        '',
-        '🔗 <a href="https://salvo061978.github.io/apex-edge-betting/">Apri APEX EDGE Live</a>'
+        `🟢🔥 <b>APEX EDGE • SEGNALE PARTITA LIVE (TEST OPERATIVO)</b>`,
+        ``,
+        `⚽ <b>${chosenMatch.home} vs ${chosenMatch.away}</b>`,
+        `🏆 ${chosenMatch.league}`,
+        `⏱️ Minuto &amp; Score: <b>${chosenMatch.minute}</b> • Risultato: <b>${chosenMatch.score}</b>`,
+        `📊 Semaforo Live: <b>${semDisplay}/100 (🟢🔥 ENTRA ORA)</b>`,
+        `📈 Telemetria Live: xG <b>${xgDisplay}</b> • Tiri in Porta <b>${sotDisplay}</b>`,
+        ``,
+        `🎯 Pronostico: <b>${chosenSig.selection}</b>`,
+        `🧠 Strategia: <code>${chosenSig.signalType}</code>`,
+        `🟡 Mercato Betfair: <code>${spec.marketTypeCode}</code> → <b>${spec.marketLabelIt}</b>`,
+        `📌 Lato &amp; Runner Betfair: <b>${spec.sideLabel}</b> su <b>${spec.runnerDisplay}</b>${cached?.marketId ? ` (Market ID: <code>${cached.marketId}</code>)` : ''}`,
+        `💎 Quota Fair: <b>@${Number(chosenSig.fairOdd || 1.56).toFixed(2)}</b> • Target Betfair: <b>≥ @${Number(effectiveOdd).toFixed(2)}</b> (+${evalBf.netEvPct}% EV Netto)`,
+        `💶 Stake Kelly Consigliato: <b>€${stakeEuro}</b>`,
+        ``,
+        `📲 <a href="${directApexUrl}">Apri Partita &amp; Pronostico Diretto su APEX EDGE</a>`,
+        `🟡 <a href="${directBetfairUrl}">${cached?.marketId ? `Apri Mercato Diretto (${cached.marketId}) su Betfair Exchange` : 'Apri Partita Live su Betfair Exchange'}</a>`
       ].join('\n');
+
       const r = await sendTelegramMessage(msg, cfg);
-      if (st) {
-        st.className = r.ok ? 'text-[11px] font-mono font-bold text-[var(--success)]' : 'text-[11px] font-mono font-bold text-[var(--error)]';
-        st.textContent = r.ok
-          ? '✅ Messaggio di test inviato su Telegram! Controlla la tua chat/gruppo.'
-          : `❌ Errore Telegram: ${r.error}`;
+      if (r.ok) {
+        setUiFeedback('success', `✅ <b>Notifica Partita Live inviata su Telegram!</b> (${chosenMatch.home} - ${chosenMatch.away} → <b>${chosenSig.selection}</b> • Mercato Betfair: <code>${spec.marketTypeCode}</code>). Controlla subito la tua chat Telegram!`);
+      } else {
+        setUiFeedback('error', `❌ <b>Errore invio Telegram:</b> ${r.error}`);
       }
+      return r;
+    }
+
+    async function testTelegramNotification() {
+      return sendLiveMatchTestToTelegram(null, null, false);
     }
 
     async function sendTelegramLiveEntryAlert(snap, m) {
@@ -4663,7 +4788,9 @@
 
       m.liveSignals = signals;
       // Se il semaforo è verde (ENTRA ORA con quota >= soglia dinamica 1.50/1.60), congela automaticamente il segnale nello Storico Live!
-      recordLiveSignalSnapshot(m, signals[0], semaphore, preMatchInfo);
+      if (!m._isPreviewOnly) {
+        recordLiveSignalSnapshot(m, signals[0], semaphore, preMatchInfo);
+      }
       return signals;
     }
 
@@ -5275,6 +5402,9 @@
                 </p>
               </div>
               <div class="flex flex-wrap items-center gap-1.5">
+                <button onclick="sendLiveMatchTestToTelegram()" class="px-3 py-1.5 rounded-lg bg-[#38bdf8] text-black text-xs font-bold hover:opacity-90 transition">
+                  📲 Invia Prova Partita Live su Telegram
+                </button>
                 <button onclick="openBetfairLiveConnectorPanel(null, null, true)" class="px-3 py-1.5 rounded-lg bg-[var(--success)] text-white text-xs font-bold">
                   🎯 Apri Ponte Diretto Betfair API
                 </button>
@@ -5286,7 +5416,7 @@
 
             <div class="space-y-1.5">
               <div class="text-xs font-bold uppercase tracking-wider text-[var(--primary)]">
-                ⏰ Partite di Oggi &amp; Prossimi Big Match collegabili direttamente a Betfair Exchange:
+                ⏰ Partite di Oggi &amp; Prossimi Big Match collegabili direttamente a Betfair Exchange &amp; Telegram:
               </div>
               <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
                 ${upcomingNext.map(g => `
@@ -5295,9 +5425,12 @@
                       <div class="font-bold text-[var(--foreground)] truncate">${g.countryFlag} ${g.home} - ${g.away}</div>
                       <div class="text-[var(--muted-foreground)] font-mono text-[11px] truncate">${g.kickoff} • 🎯 ${g.mainPick.selection}</div>
                     </div>
-                    <div class="flex items-center gap-1.5 pt-1">
+                    <div class="flex flex-wrap items-center gap-1.5 pt-1">
                       <button onclick="openBetfairLiveConnectorPanel('pre:${g.id}', null, true)" class="flex-1 px-2 py-1 rounded bg-[var(--warning)]/20 text-[var(--warning)] border border-[var(--warning)]/50 font-bold hover:bg-[var(--warning)] hover:text-black transition">
-                        🎯 Collega su Betfair
+                        🎯 Betfair
+                      </button>
+                      <button onclick="sendLiveMatchTestToTelegram('pre:${g.id}', null, false)" class="flex-1 px-2 py-1 rounded bg-[#38bdf8]/20 text-[#38bdf8] border border-[#38bdf8]/50 font-bold hover:bg-[#38bdf8] hover:text-black transition">
+                        📲 Prova Telegram
                       </button>
                       <button onclick="openMatchDetailPage('${g.id}')" class="px-2 py-1 rounded bg-[var(--secondary)] text-[var(--secondary-foreground)] font-semibold hover:bg-[var(--primary)] hover:text-[var(--primary-foreground)] transition">
                         Analisi →
@@ -5477,12 +5610,15 @@
                             </div>
                           </div>
 
-                          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
                             <button onclick="openBetfairLiveConnectorPanel('live:${m.id}', '${sig.id}', true)" class="w-full py-2 px-2.5 rounded-lg text-xs font-bold bg-[var(--warning)] text-black hover:opacity-90 transition flex items-center justify-center gap-1">
-                              <span>🎯 Collega / Apri su Betfair</span>
+                              <span>🎯 Collega Betfair</span>
+                            </button>
+                            <button onclick="sendLiveMatchTestToTelegram('live:${m.id}', '${sig.id}', false)" class="w-full py-2 px-2.5 rounded-lg text-xs font-bold bg-[#38bdf8] text-black hover:opacity-90 transition flex items-center justify-center gap-1">
+                              <span>📲 Invia su Telegram</span>
                             </button>
                             <button onclick="toggleSlipItem('${sig.id}', '${m.home} - ${m.away} (LIVE ${m.minute}\\')', '${sig.selection}', ${userBfOdd}, ${evalBf.probPct}, ${Math.max(0, evalBf.netEvPct)}, true)" class="w-full py-2 px-2.5 rounded-lg text-xs font-bold transition ${inSlip ? 'bg-[var(--success)] text-white' : 'bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90'}">
-                              ${inSlip ? '✓ In Schedina' : `⚡ Metti in Schedina @${userBfOdd.toFixed(2)}`}
+                              ${inSlip ? '✓ In Schedina' : `⚡ Schedina @${userBfOdd.toFixed(2)}`}
                             </button>
                           </div>
                         </div>
@@ -5897,14 +6033,34 @@
       }
     }
 
+    function parseLiveHashParams() {
+      const h = window.location.hash || '';
+      if (!h.startsWith('#live=')) return null;
+      const raw = h.slice(1);
+      const params = new URLSearchParams(raw);
+      const liveId = params.get('live') || decodeURIComponent(h.slice(6).split('&')[0] || '');
+      const sigId = params.get('sig') || null;
+      return liveId ? { liveId, sigId } : null;
+    }
+
+    function applyLiveDeepLinkFromHash() {
+      const parsed = parseLiveHashParams();
+      if (!parsed) return;
+      currentPage = 'live';
+      selectedLiveId = parsed.liveId;
+      navigateToPage('live', null, true);
+      renderLiveAccordion();
+      openBetfairLiveConnectorPanel(parsed.liveId, parsed.sigId, true);
+    }
+
+    window.addEventListener('hashchange', applyLiveDeepLinkFromHash);
+
     window.addEventListener('DOMContentLoaded', () => {
       loadUiState();
-      if (window.location.hash && window.location.hash.startsWith('#live=')) {
-        const targetLiveId = decodeURIComponent(window.location.hash.slice(6));
-        if (targetLiveId) {
-          currentPage = 'live';
-          selectedLiveId = targetLiveId;
-        }
+      const initialHash = parseLiveHashParams();
+      if (initialHash) {
+        currentPage = 'live';
+        selectedLiveId = initialHash.liveId;
       }
       updateDynamicDayButtons();
       setDayFilter(selectedDay);
@@ -5914,7 +6070,19 @@
       renderLiveSignalsHistoryPanel('live-signals-history-panel');
       navigateToPage(currentPage, activeDetailMatchId, true);
       renderBetSlip();
-      syncRealLiveMatchesFromFotmob(true);
+
+      Promise.resolve(syncRealLiveMatchesFromFotmob(true)).finally(() => {
+        if (initialHash) {
+          openBetfairLiveConnectorPanel(initialHash.liveId, initialHash.sigId, true);
+        }
+        try {
+          const tgCfg = getTelegramLocalConfig();
+          if (tgCfg.botToken && tgCfg.chatId && !localStorage.getItem('apex_live_tg_test_sent_v3')) {
+            localStorage.setItem('apex_live_tg_test_sent_v3', '1');
+            sendLiveMatchTestToTelegram(null, null, true);
+          }
+        } catch (_) {}
+      });
 
       const info = getDynamicDateInfo();
       const twoDaysAgoDate = new Date();

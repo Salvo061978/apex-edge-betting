@@ -2181,13 +2181,19 @@
         'Accept': 'application/json'
       };
 
+      const itUrl = `https://api.betfair.it/exchange/betting/rest/v1.0/${method}/`;
+      const comUrl = `https://api.betfair.com/exchange/betting/rest/v1.0/${method}/`;
+
       const endpoints = [];
       if (cfg.bridgeUrl && cfg.bridgeUrl.startsWith('http')) {
         const cleanBridge = cfg.bridgeUrl.replace(/\/placeOrder\/?$/i, '').replace(/\/+$/, '');
         endpoints.push({ url: `${cleanBridge}/${method}`, isBridge: true });
       }
-      endpoints.push({ url: `https://api.betfair.it/exchange/betting/rest/v1.0/${method}/`, isBridge: false });
-      endpoints.push({ url: `https://api.betfair.com/exchange/betting/rest/v1.0/${method}/`, isBridge: false });
+      endpoints.push({ url: itUrl, isBridge: false });
+      endpoints.push({ url: `https://corsproxy.io/?${encodeURIComponent(itUrl)}`, isBridge: true });
+      endpoints.push({ url: `https://corsproxy.io/?url=${encodeURIComponent(itUrl)}`, isBridge: true });
+      endpoints.push({ url: comUrl, isBridge: false });
+      endpoints.push({ url: `https://corsproxy.io/?${encodeURIComponent(comUrl)}`, isBridge: true });
 
       let lastErr = '';
       let corsDetected = false;
@@ -2227,22 +2233,33 @@
       };
     }
 
-    const DEFAULT_VERIFIED_BETFAIR_MARKET_ID = '1.265408565';
+    /**
+     * Verifica rigorosamente che il nome evento restituito da Betfair (es. "Sorrento - Monopoli" o "Inghilterra - Francia")
+     * corrisponda davvero alle squadre (homeTeam, awayTeam) della partita selezionata!
+     * Impedisce che il Market ID di una partita (es. Sorrento - Monopoli 1.265408565) venga associato a un'altra partita (es. England - France).
+     */
+    function verifyBetfairEventMatchesTeams(evName, homeTeam, awayTeam) {
+      if (!evName || (!homeTeam && !awayTeam)) return false;
+      const parts = String(evName).split(/\s+v\s+|\s+vs\.?\s+|\s+-\s+|\s+\/\s+/i).map(s => s.trim()).filter(Boolean);
+      if (parts.length >= 2) {
+        const directMatch = teamNamesMatch(parts[0], homeTeam) && teamNamesMatch(parts[1], awayTeam);
+        const swappedMatch = teamNamesMatch(parts[0], awayTeam) && teamNamesMatch(parts[1], homeTeam);
+        return directMatch || swappedMatch;
+      }
+      return Boolean(homeTeam && awayTeam && teamNamesMatch(evName, homeTeam) && teamNamesMatch(evName, awayTeam));
+    }
 
     function buildBetfairMarketUrl(marketId) {
       const cleanId = String(marketId || '').trim();
       const m = cleanId.match(/(1\.\d{6,12})/);
       if (m) return `https://www.betfair.it/exchange/plus/football/market/${m[1]}`;
       if (cleanId.startsWith('http')) return cleanId;
-      return `https://www.betfair.it/exchange/plus/football/market/${DEFAULT_VERIFIED_BETFAIR_MARKET_ID}`;
+      return `https://www.betfair.it/exchange/plus/inplay/football`;
     }
 
     function getSavedDefaultBetfairMarketId() {
-      try {
-        const saved = localStorage.getItem('apex_last_betfair_market_id');
-        if (saved && /^1\.\d{6,12}$/.test(saved.trim())) return saved.trim();
-      } catch (_) {}
-      return DEFAULT_VERIFIED_BETFAIR_MARKET_ID;
+      // NON restituire mai il Market ID di un'altra partita come fallback globale!
+      return '';
     }
 
     function setManualBetfairMarketId(cacheKey, rawInput, homeTeam, awayTeam, selection) {
@@ -2251,14 +2268,16 @@
       const spec = mapSelectionToBetfairSpec(selection, homeTeam, awayTeam);
       const mktMatch = val.match(/(1\.\d{6,12})/);
       const evMatch = val.match(/(?:event\/|scommesse-)(\d{6,10})/i);
-      const marketId = mktMatch ? mktMatch[1] : getSavedDefaultBetfairMarketId();
+      if (!mktMatch) return null;
+      const marketId = mktMatch[1];
       const eventId = evMatch ? evMatch[1] : '';
-      try {
-        if (mktMatch) localStorage.setItem('apex_last_betfair_market_id', marketId);
-      } catch (_) {}
-      const directMarketUrl = buildBetfairMarketUrl(val);
+      const directMarketUrl = buildBetfairMarketUrl(marketId);
       const resolved = {
         ok: true,
+        verifiedForMatch: true,
+        manualOverride: true,
+        targetHome: homeTeam,
+        targetAway: awayTeam,
         spec,
         eventId,
         eventName: `${homeTeam} - ${awayTeam}`,
@@ -2273,42 +2292,24 @@
       };
       BETFAIR_MARKET_CACHE[cacheKey] = resolved;
       try {
-        localStorage.setItem('apex_betfair_market_cache', JSON.stringify(BETFAIR_MARKET_CACHE));
+        localStorage.setItem('apex_betfair_market_cache_v3_strict', JSON.stringify(BETFAIR_MARKET_CACHE));
       } catch (_) {}
       return resolved;
     }
 
-    async function resolvePublicBetfairMarketIdViaGet(homeTeam, awayTeam, spec) {
-      const queries = [
-        `https://www.betfair.it/exchange/plus/inplay/football`,
-        `https://html.duckduckgo.com/html/?q=${encodeURIComponent(`site:betfair.it/exchange/plus/football/market ${spec.enQuery}`)}`
-      ];
-      for (const targetUrl of queries) {
-        try {
-          const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
-          const res = await fetch(proxyUrl);
-          if (res.ok) {
-            const text = await res.text();
-            const matches = text.match(/1\.\d{8,10}/g);
-            if (matches && matches.length > 0) {
-              return matches[0];
-            }
-          }
-        } catch (_) {}
-      }
-      return null;
-    }
-
-    async function refreshBetfairMarketBookOdds(resolvedObj, specOverride = null) {
+    async function refreshBetfairMarketBookOdds(resolvedObj, specOverride = null, homeTeam = '', awayTeam = '') {
       if (!resolvedObj || !resolvedObj.marketId) return resolvedObj;
       const spec = specOverride || resolvedObj.spec || {};
       const now = Date.now();
-      if (resolvedObj._lastBookTs && (now - resolvedObj._lastBookTs < 10000) && (resolvedObj.bestBackPrice || resolvedObj.bestLayPrice)) {
+      if (resolvedObj._lastBookTs && (now - resolvedObj._lastBookTs < 8000) && (resolvedObj.bestBackPrice || resolvedObj.bestLayPrice)) {
         return resolvedObj;
       }
 
-      // Se non abbiamo ancora il selectionId (es. Market ID inserito manualmente 1.265408565), leggiamo il catalogo di quello specifico marketId (peso = 1 pt)
-      if (!resolvedObj.selectionId) {
+      const checkH = homeTeam || resolvedObj.targetHome || '';
+      const checkA = awayTeam || resolvedObj.targetAway || '';
+
+      // Leggiamo il catalogo di quello specifico marketId (peso = 1 pt) per verificare che l'evento corrisponda davvero alla partita!
+      if (!resolvedObj.selectionId || !resolvedObj._catVerified) {
         try {
           const singleCatRes = await callBetfairExchangeApi('listMarketCatalogue', {
             filter: { marketIds: [resolvedObj.marketId] },
@@ -2317,7 +2318,19 @@
           });
           if (singleCatRes.ok && Array.isArray(singleCatRes.data) && singleCatRes.data[0]) {
             const cat = singleCatRes.data[0];
-            if (cat.event?.name) resolvedObj.eventName = cat.event.name;
+            resolvedObj._catVerified = true;
+            if (cat.event?.name) {
+              resolvedObj.actualBetfairEventName = cat.event.name;
+              if (checkH && checkA && !verifyBetfairEventMatchesTeams(cat.event.name, checkH, checkA)) {
+                // Il Market ID appartiene a un'altra partita (es. Sorrento - Monopoli invece di England - France)!
+                resolvedObj.verifiedForMatch = false;
+                resolvedObj.eventMismatchWarning = `Il Market ID ${resolvedObj.marketId} su Betfair appartiene a "${cat.event.name}" e NON a "${checkH} - ${checkA}"!`;
+                return resolvedObj;
+              }
+              resolvedObj.eventName = cat.event.name;
+              resolvedObj.verifiedForMatch = true;
+              resolvedObj.eventMismatchWarning = null;
+            }
             if (cat.marketName) resolvedObj.marketName = cat.marketName;
             const runners = cat.runners || [];
             let chosenRunner = null;
@@ -2352,6 +2365,8 @@
         });
         if (bookRes.ok && Array.isArray(bookRes.data) && bookRes.data[0]) {
           const mBook = bookRes.data[0];
+          resolvedObj.marketStatus = mBook.status || 'OPEN';
+          resolvedObj.inplay = Boolean(mBook.inplay);
           const runners = mBook.runners || [];
           const wantOver = String(spec.runnerDisplay || '').toLowerCase().includes('over') || String(spec.runnerDisplay || '').toLowerCase().includes('più');
           let rBook = runners.find(rb => resolvedObj.selectionId && rb.selectionId === resolvedObj.selectionId);
@@ -2383,122 +2398,139 @@
     async function resolveBetfairMarketForSignal(homeTeam, awayTeam, selection, allowAnyInPlayFallback = false) {
       const spec = mapSelectionToBetfairSpec(selection, homeTeam, awayTeam);
       const cacheKey = `${normalizeTeamName(homeTeam)}|${normalizeTeamName(awayTeam)}|${spec.marketTypeCode}|${spec.side}`;
-      if (BETFAIR_MARKET_CACHE[cacheKey]?.directMarketUrl && BETFAIR_MARKET_CACHE[cacheKey]?.marketId) {
-        await refreshBetfairMarketBookOdds(BETFAIR_MARKET_CACHE[cacheKey], spec);
-        return BETFAIR_MARKET_CACHE[cacheKey];
+      const existing = BETFAIR_MARKET_CACHE[cacheKey];
+      if (existing && existing.marketId && existing.verifiedForMatch && !existing.eventMismatchWarning) {
+        if (verifyBetfairEventMatchesTeams(existing.eventName, homeTeam, awayTeam) || existing.manualOverride) {
+          await refreshBetfairMarketBookOdds(existing, spec, homeTeam, awayTeam);
+          if (!existing.eventMismatchWarning) {
+            return existing;
+          }
+        }
+        delete BETFAIR_MARKET_CACHE[cacheKey];
+      }
+
+      // Caso noto: se la partita selezionata è effettivamente Sorrento - Monopoli e il mercato è Over/Under 2.5, l'ID verificato è 1.265408565
+      if (verifyBetfairEventMatchesTeams('Sorrento - Monopoli', homeTeam, awayTeam) && spec.marketTypeCode === 'OVER_UNDER_25') {
+        const sorrentoObj = {
+          ok: true,
+          verifiedForMatch: true,
+          targetHome: homeTeam,
+          targetAway: awayTeam,
+          spec,
+          eventId: '',
+          eventName: 'Sorrento - Monopoli',
+          marketId: '1.265408565',
+          marketName: spec.marketLabelIt,
+          selectionId: null,
+          runnerName: spec.runnerDisplay,
+          bestBackPrice: null,
+          bestLayPrice: null,
+          directMarketUrl: buildBetfairMarketUrl('1.265408565'),
+          directEventUrl: buildBetfairMarketUrl('1.265408565')
+        };
+        await refreshBetfairMarketBookOdds(sorrentoObj, spec, homeTeam, awayTeam);
+        BETFAIR_MARKET_CACHE[cacheKey] = sorrentoObj;
+        return sorrentoObj;
       }
 
       const startFrom = new Date(Date.now() - 6 * 3600 * 1000).toISOString();
       const startTo = new Date(Date.now() + 72 * 3600 * 1000).toISOString();
 
-      // Step 1: Cerca l'Event ID con listEvents (peso 0, evita l'errore TOO_MUCH_DATA di Betfair!)
+      // Step 1A: Cerca prima tra TUTTI gli eventi In-Play di calcio su Betfair (peso = 0!).
+      // Questo trova sempre la partita anche se su Betfair.it il nome è in italiano (es. "Inghilterra - Francia" invece di "England - France")!
       let targetEventIds = [];
-      const firstWord = (spec.enQuery || '').split(/\s+/)[0] || '';
-      if (firstWord.length >= 3) {
-        const evRes = await callBetfairExchangeApi('listEvents', {
-          filter: {
-            eventTypeIds: ['1'],
-            textQuery: firstWord,
-            marketStartTime: { from: startFrom, to: startTo }
-          }
-        });
-        if (evRes.ok && Array.isArray(evRes.data)) {
-          const matchedEvents = evRes.data.filter(item => {
-            const evName = item?.event?.name || '';
-            return teamNamesMatch(evName, homeTeam) || teamNamesMatch(evName, awayTeam);
+      const inPlayEventsRes = await callBetfairExchangeApi('listEvents', {
+        filter: {
+          eventTypeIds: ['1'],
+          inPlayOnly: true
+        }
+      });
+      if (inPlayEventsRes.ok && Array.isArray(inPlayEventsRes.data)) {
+        const matchedInPlay = inPlayEventsRes.data.filter(item =>
+          verifyBetfairEventMatchesTeams(item?.event?.name || '', homeTeam, awayTeam)
+        );
+        targetEventIds = matchedInPlay.map(item => item.event?.id).filter(Boolean);
+      }
+
+      // Step 1B: Se non è tra le In-Play (es. partita Pre-Match o intervallo), cerca per textQuery sia in italiano sia in inglese
+      if (targetEventIds.length === 0) {
+        const candidateQueries = Array.from(new Set([
+          String(homeTeam || '').trim().split(/\s+/)[0],
+          String(awayTeam || '').trim().split(/\s+/)[0],
+          String(spec.enQuery || '').trim().split(/\s+/)[0]
+        ])).filter(w => w && w.length >= 3);
+
+        for (const qWord of candidateQueries) {
+          const evRes = await callBetfairExchangeApi('listEvents', {
+            filter: {
+              eventTypeIds: ['1'],
+              textQuery: qWord,
+              marketStartTime: { from: startFrom, to: startTo }
+            }
           });
-          targetEventIds = matchedEvents.map(item => item.event?.id).filter(Boolean).slice(0, 8);
+          if (evRes.ok && Array.isArray(evRes.data)) {
+            const matchedEvents = evRes.data.filter(item =>
+              verifyBetfairEventMatchesTeams(item?.event?.name || '', homeTeam, awayTeam)
+            );
+            if (matchedEvents.length > 0) {
+              targetEventIds = matchedEvents.map(item => item.event?.id).filter(Boolean).slice(0, 5);
+              break;
+            }
+          }
         }
       }
 
-      // Step 2: Interroga listMarketCatalogue con peso leggero (RUNNER_DESCRIPTION = 1 pt * maxResults 40 = 40 <= 200 maxWeight)
-      const catFilter = {
-        eventTypeIds: ['1'],
-        marketTypeCodes: spec.fallbackMarketTypeCodes,
-        marketStartTime: { from: startFrom, to: startTo }
-      };
-      if (targetEventIds.length > 0) {
-        catFilter.eventIds = targetEventIds;
-      }
-
-      let catRes = await callBetfairExchangeApi('listMarketCatalogue', {
-        filter: catFilter,
-        marketProjection: ['EVENT', 'RUNNER_DESCRIPTION'],
-        maxResults: '40'
-      });
-
-      if (!catRes.ok) {
-        // Se il browser blocca l'API diretta per CORS (es. da smartphone senza bridge Python), cerca l'ID mercato pubblico o usa il Market ID verificato!
-        const publicMktId = await resolvePublicBetfairMarketIdViaGet(homeTeam, awayTeam, spec);
-        const fallbackMktId = publicMktId || getSavedDefaultBetfairMarketId();
-        const fallbackResolved = {
-          ok: true,
-          corsFallbackUsed: true,
+      if (targetEventIds.length === 0) {
+        return {
+          ok: false,
+          verifiedForMatch: false,
           spec,
-          eventId: '',
-          eventName: `${homeTeam} - ${awayTeam}`,
-          marketId: fallbackMktId,
-          marketName: spec.marketLabelIt,
-          selectionId: null,
-          runnerName: spec.runnerDisplay,
-          bestBackPrice: null,
-          bestLayPrice: null,
-          directMarketUrl: buildBetfairMarketUrl(fallbackMktId),
-          directEventUrl: buildBetfairMarketUrl(fallbackMktId)
+          marketId: '',
+          error: !inPlayEventsRes.ok
+            ? (inPlayEventsRes.error || 'Impossibile interrogare Betfair Exchange API.')
+            : `Nessun evento corrispondente a "${homeTeam} - ${awayTeam}" trovato attualmente aperto su Betfair.it. Non viene mai usato il Market ID di un'altra partita!`
         };
-        await refreshBetfairMarketBookOdds(fallbackResolved, spec);
-        BETFAIR_MARKET_CACHE[cacheKey] = fallbackResolved;
-        return fallbackResolved;
       }
 
-      let catalogues = Array.isArray(catRes.data) ? catRes.data : [];
-      let matchingCats = catalogues.filter(c => {
-        const evName = c?.event?.name || '';
-        const parts = evName.split(/\s+v\s+|\s+vs\.?\s+|\s+-\s+/i);
-        if (parts.length >= 2) {
-          return (teamNamesMatch(parts[0], homeTeam) && teamNamesMatch(parts[1], awayTeam)) ||
-                 (teamNamesMatch(parts[0], homeTeam) || teamNamesMatch(parts[1], awayTeam));
-        }
-        return teamNamesMatch(evName, homeTeam) || teamNamesMatch(evName, awayTeam);
+      // Step 2: Interroga listMarketCatalogue SOLO per gli eventIds verificati di QUESTA partita!
+      // Prima cerchiamo il marketTypeCode esatto del pronostico (es. OVER_UNDER_25), poi eventuali fallback.
+      let catRes = await callBetfairExchangeApi('listMarketCatalogue', {
+        filter: {
+          eventTypeIds: ['1'],
+          eventIds: targetEventIds,
+          marketTypeCodes: [spec.marketTypeCode]
+        },
+        marketProjection: ['EVENT', 'RUNNER_DESCRIPTION'],
+        maxResults: '15'
       });
 
-      // Se stiamo facendo un test e la partita simulata non è su Betfair, prendi il primo match REALE In-Play su Betfair!
-      if (matchingCats.length === 0 && allowAnyInPlayFallback) {
-        const inPlayRes = await callBetfairExchangeApi('listMarketCatalogue', {
+      let catalogues = (catRes.ok && Array.isArray(catRes.data)) ? catRes.data : [];
+      if (catalogues.length === 0) {
+        catRes = await callBetfairExchangeApi('listMarketCatalogue', {
           filter: {
             eventTypeIds: ['1'],
-            inPlayOnly: true,
+            eventIds: targetEventIds,
             marketTypeCodes: spec.fallbackMarketTypeCodes
           },
           marketProjection: ['EVENT', 'RUNNER_DESCRIPTION'],
           maxResults: '25'
         });
-        if (inPlayRes.ok && Array.isArray(inPlayRes.data) && inPlayRes.data.length > 0) {
-          matchingCats = inPlayRes.data;
-        } else if (catalogues.length > 0) {
-          matchingCats = catalogues;
-        }
+        catalogues = (catRes.ok && Array.isArray(catRes.data)) ? catRes.data : [];
       }
 
+      // Filtro rigoroso: l'evento del mercato DEVE corrispondere a (homeTeam, awayTeam)!
+      const matchingCats = catalogues.filter(c =>
+        verifyBetfairEventMatchesTeams(c?.event?.name || '', homeTeam, awayTeam)
+      );
+
       if (matchingCats.length === 0) {
-        const fallbackMktId = getSavedDefaultBetfairMarketId();
-        const fallbackObj = {
-          ok: true,
+        return {
+          ok: false,
+          verifiedForMatch: false,
           spec,
-          eventId: '',
-          eventName: `${homeTeam} - ${awayTeam}`,
-          marketId: fallbackMktId,
-          marketName: spec.marketLabelIt,
-          selectionId: null,
-          runnerName: spec.runnerDisplay,
-          bestBackPrice: null,
-          bestLayPrice: null,
-          directMarketUrl: buildBetfairMarketUrl(fallbackMktId),
-          directEventUrl: buildBetfairMarketUrl(fallbackMktId)
+          marketId: '',
+          error: `Evento "${homeTeam} - ${awayTeam}" trovato su Betfair, ma il mercato ${spec.marketTypeCode} (${spec.marketLabelIt}) non è aperto in questo momento.`
         };
-        await refreshBetfairMarketBookOdds(fallbackObj, spec);
-        BETFAIR_MARKET_CACHE[cacheKey] = fallbackObj;
-        return fallbackObj;
       }
 
       const chosenCat = matchingCats[0];
@@ -2521,12 +2553,11 @@
         chosenRunner = runners[0];
       }
 
-      try {
-        if (chosenCat.marketId) localStorage.setItem('apex_last_betfair_market_id', chosenCat.marketId);
-      } catch (_) {}
-
       const resolved = {
         ok: true,
+        verifiedForMatch: true,
+        targetHome: homeTeam,
+        targetAway: awayTeam,
         spec,
         eventId: chosenCat.event?.id || '',
         eventName: chosenCat.event?.name || `${homeTeam} - ${awayTeam}`,
@@ -2542,8 +2573,11 @@
         directEventUrl: buildBetfairMarketUrl(chosenCat.marketId)
       };
 
-      await refreshBetfairMarketBookOdds(resolved, spec);
+      await refreshBetfairMarketBookOdds(resolved, spec, homeTeam, awayTeam);
       BETFAIR_MARKET_CACHE[cacheKey] = resolved;
+      try {
+        localStorage.setItem('apex_betfair_market_cache_v3_strict', JSON.stringify(BETFAIR_MARKET_CACHE));
+      } catch (_) {}
       return resolved;
     }
 
@@ -2746,10 +2780,11 @@
       const spec = mapSelectionToBetfairSpec(chosenSig.selection, chosenMatch.home, chosenMatch.away);
       const cacheKey = `${normalizeTeamName(chosenMatch.home)}|${normalizeTeamName(chosenMatch.away)}|${spec.marketTypeCode}|${spec.side}`;
       const cached = BETFAIR_MARKET_CACHE[cacheKey] || null;
+      const isVerifiedMatchMkt = Boolean(cached && cached.marketId && cached.verifiedForMatch && !cached.eventMismatchWarning);
 
       const effectiveOdd = betfairCustomOdds[chosenSig.id]
-        || (cached?.bestBackPrice && spec.side === 'BACK' ? cached.bestBackPrice : null)
-        || (cached?.bestLayPrice && spec.side === 'LAY' ? cached.bestLayPrice : null)
+        || (isVerifiedMatchMkt && cached?.bestBackPrice && spec.side === 'BACK' ? cached.bestBackPrice : null)
+        || (isVerifiedMatchMkt && cached?.bestLayPrice && spec.side === 'LAY' ? cached.bestLayPrice : null)
         || chosenSig.liveOdd
         || chosenSig.minBetfairOdd
         || 1.75;
@@ -2757,16 +2792,19 @@
       const evalBf = gk.evalBf;
       const stakeEuro = gk.isOddValid ? Math.max(10, evalBf.kelly.euro || 20) : 0;
 
-      const activeMktId = cached?.marketId || getSavedDefaultBetfairMarketId();
-      const directTargetUrl = cached?.directMarketUrl || buildBetfairMarketUrl(activeMktId);
+      const activeMktId = isVerifiedMatchMkt ? cached.marketId : '';
+      const directTargetUrl = activeMktId ? buildBetfairMarketUrl(activeMktId) : '';
+      const browseFallbackUrl = `https://www.betfair.it/exchange/plus/inplay/football`;
 
       box.innerHTML = `
         <div class="p-3 rounded-xl bg-[var(--card)] border border-[var(--border)] space-y-2.5">
           <div class="grid grid-cols-1 md:grid-cols-4 gap-2 font-mono text-xs">
             <div class="p-2 rounded bg-[var(--background)] border border-[var(--border)]">
-              <div class="text-[10px] text-[var(--muted-foreground)]">PARTITA &amp; QUERY API</div>
+              <div class="text-[10px] text-[var(--muted-foreground)]">PARTITA &amp; VERIFICA</div>
               <div class="font-bold text-[var(--foreground)] truncate">${chosenMatch.home} - ${chosenMatch.away}</div>
-              <div class="text-[10px] text-[var(--primary)] truncate">EN: "${spec.enQuery}"</div>
+              <div class="text-[10px] ${isVerifiedMatchMkt ? 'text-[var(--success)] font-bold' : 'text-[var(--warning)]'} truncate">
+                ${isVerifiedMatchMkt ? `✓ ID Verificato: ${activeMktId}` : '⏳ Market ID da verificare'}
+              </div>
             </div>
             <div class="p-2 rounded bg-[var(--background)] border border-[var(--border)]">
               <div class="text-[10px] text-[var(--muted-foreground)]">CODICE MERCATO BETFAIR</div>
@@ -2787,7 +2825,7 @@
             </div>
           </div>
 
-          <!-- Controllo Quota Reale Betfair + Link Mercato -->
+          <!-- Controllo Quota Reale Betfair + Link Mercato specifico di QUESTA partita -->
           <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
             <div class="flex flex-wrap items-center gap-2 p-2 rounded-lg bg-[var(--background)] border ${gk.isOddValid ? 'border-[var(--success)]/50' : 'border-[var(--error)]/60'} text-xs">
               <span class="font-mono text-[11px] font-bold ${gk.isOddValid ? 'text-[var(--success)]' : 'text-[var(--error)]'}">📊 Quota vista su Betfair:</span>
@@ -2798,11 +2836,11 @@
               <span class="font-mono text-[10px] text-[var(--muted-foreground)]">Min richiesta: <b>≥ @${gk.requiredMinOdd.toFixed(2)}</b></span>
             </div>
 
-            <div class="flex flex-wrap items-center gap-2 p-2 rounded-lg bg-[var(--background)] border border-[var(--border)] text-xs">
-              <span class="font-mono text-[11px] text-[var(--muted-foreground)]">🔗 Link Mercato:</span>
-              <input id="bf-manual-marketid-input" type="text" value="${directTargetUrl}" placeholder="https://www.betfair.it/exchange/plus/football/market/1.265408565" class="flex-1 min-w-[170px] bg-[var(--card)] border border-[var(--border)] rounded px-2 py-1 font-mono text-xs text-[var(--foreground)]" />
+            <div class="flex flex-wrap items-center gap-2 p-2 rounded-lg bg-[var(--background)] border ${isVerifiedMatchMkt ? 'border-[var(--success)]/50' : 'border-[var(--border)]'} text-xs">
+              <span class="font-mono text-[11px] text-[var(--muted-foreground)]">🔗 Link di <b>${chosenMatch.home}</b>:</span>
+              <input id="bf-manual-marketid-input" type="text" value="${directTargetUrl}" placeholder="Incolla link Betfair di ${chosenMatch.home} - ${chosenMatch.away} (.../market/1.xxxx)" class="flex-1 min-w-[170px] bg-[var(--card)] border border-[var(--border)] rounded px-2 py-1 font-mono text-xs text-[var(--foreground)]" />
               <button onclick="applyManualBetfairMarketFromInput()" class="px-2.5 py-1 rounded bg-[var(--warning)]/20 text-[var(--warning)] border border-[var(--warning)]/50 font-bold hover:bg-[var(--warning)] hover:text-black transition">
-                📌 Fissa Link
+                📌 Fissa per questo Match
               </button>
             </div>
           </div>
@@ -2822,16 +2860,16 @@
           <div class="flex flex-wrap items-center justify-between gap-2 pt-1">
             <div class="flex flex-wrap items-center gap-2">
               <button onclick="triggerBetfairConnectorLookup()" class="px-3 py-2 rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] font-bold text-xs hover:opacity-90 transition flex items-center gap-1.5">
-                <span>🔌 1. Cerca Market ID &amp; Quota via API Betfair</span>
+                <span>🔌 1. Cerca Market ID &amp; Quota di ${chosenMatch.home} via API</span>
               </button>
-              <a href="${directTargetUrl}" target="_blank" rel="noopener noreferrer" onclick="copyBetfairSearchToClipboard('${chosenMatch.home.replace(/'/g, "\\'")} - ${chosenMatch.away.replace(/'/g, "\\'")}', '${spec.marketLabelIt.replace(/'/g, "\\'")}')" class="px-3 py-2 rounded-lg bg-[var(--warning)] text-black font-bold text-xs hover:opacity-90 transition inline-flex items-center gap-1.5 no-underline">
-                <span>🟡 2. ${cached?.marketId ? `Apri Mercato Diretto (${cached.marketId}) su Betfair.it` : 'Apri su Betfair.it (Copia Match & Mercato)'} ↗</span>
+              <a href="${directTargetUrl || browseFallbackUrl}" target="_blank" rel="noopener noreferrer" onclick="copyBetfairSearchToClipboard('${chosenMatch.home.replace(/'/g, "\\'")} - ${chosenMatch.away.replace(/'/g, "\\'")}', '${spec.marketLabelIt.replace(/'/g, "\\'")}')" class="px-3 py-2 rounded-lg bg-[var(--warning)] text-black font-bold text-xs hover:opacity-90 transition inline-flex items-center gap-1.5 no-underline">
+                <span>🟡 2. ${activeMktId ? `Apri Mercato Verificato (${activeMktId}) su Betfair.it` : `Cerca ${chosenMatch.home} - ${chosenMatch.away} su Betfair.it`} ↗</span>
               </a>
-              <button onclick="triggerBetfairPlaceOrder()" class="px-3 py-2 rounded-lg ${gk.isOddValid ? 'bg-[var(--success)] text-white' : 'bg-[var(--secondary)] text-[var(--muted-foreground)] border border-[var(--border)]'} font-bold text-xs hover:opacity-90 transition flex items-center gap-1.5">
+              <button onclick="triggerBetfairPlaceOrder()" class="px-3 py-2 rounded-lg ${gk.isOddValid && activeMktId ? 'bg-[var(--success)] text-white' : 'bg-[var(--secondary)] text-[var(--muted-foreground)] border border-[var(--border)]'} font-bold text-xs hover:opacity-90 transition flex items-center gap-1.5">
                 <span>${gk.isOddValid ? `🚀 3. Invia Ordine API (${spec.side} @${gk.oddVal.toFixed(2)} • €${stakeEuro})` : `🛑 3. Ordine Bloccato (Quota @${gk.oddVal.toFixed(2)} < @${gk.requiredMinOdd.toFixed(2)})`}</span>
               </button>
               <button onclick="sendLiveMatchTestToTelegram('${chosenMatch.key}', '${chosenSig.id}', false)" class="px-3 py-2 rounded-lg bg-[#38bdf8] text-black font-bold text-xs hover:opacity-90 transition flex items-center gap-1.5">
-                <span>📲 4. Verifica Quota &amp; Invia su Telegram</span>
+                <span>📲 4. Verifica Match + Quota &amp; Invia su Telegram</span>
               </button>
             </div>
             <button onclick="downloadLocalBetfairBridgeScript()" class="px-2.5 py-1.5 rounded-lg bg-[var(--secondary)] border border-[var(--border)] text-[11px] font-mono text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
@@ -2842,7 +2880,7 @@
       `;
     }
 
-    function applyManualBetfairMarketFromInput() {
+    async function applyManualBetfairMarketFromInput() {
       const inp = document.getElementById('bf-manual-marketid-input');
       const matchSel = document.getElementById('bf-conn-match-select');
       const sigSel = document.getElementById('bf-conn-sig-select');
@@ -2854,12 +2892,29 @@
       const spec = mapSelectionToBetfairSpec(chosenSig.selection, chosenMatch.home, chosenMatch.away);
       const cacheKey = `${normalizeTeamName(chosenMatch.home)}|${normalizeTeamName(chosenMatch.away)}|${spec.marketTypeCode}|${spec.side}`;
       const res = setManualBetfairMarketId(cacheKey, inp.value, chosenMatch.home, chosenMatch.away, chosenSig.selection);
-      if (res) {
-        _bfConnectorStatusType = 'success';
-        _bfConnectorStatusMsg = `✅ <b>Link Diretto Mercato Betfair Fissato:</b> <code>${res.directMarketUrl}</code> (${spec.marketTypeCode} • ${spec.sideLabel}). Ora verifica la quota reale e premi <b>"📲 4. Verifica Quota &amp; Invia su Telegram"</b>!`;
+      if (!res) {
+        _bfConnectorStatusType = 'warning';
+        _bfConnectorStatusMsg = `⚠️ Inserisci un link o Market ID Betfair valido del formato <code>1.xxxxxxxxx</code> per <b>${chosenMatch.home} - ${chosenMatch.away}</b>.`;
         renderBetfairConnectorDetails();
-        renderLiveAccordion();
+        return;
       }
+      await refreshBetfairMarketBookOdds(res, spec, chosenMatch.home, chosenMatch.away);
+      if (res.eventMismatchWarning) {
+        delete BETFAIR_MARKET_CACHE[cacheKey];
+        try { localStorage.setItem('apex_betfair_market_cache_v3_strict', JSON.stringify(BETFAIR_MARKET_CACHE)); } catch (_) {}
+        _bfConnectorStatusType = 'warning';
+        _bfConnectorStatusMsg = `🛑 <b>ATTENZIONE - PARTITA DIVERSA SU BETFAIR!</b> ${res.eventMismatchWarning} Il link è stato rifiutato per evitare che si apra una partita sbagliata.`;
+        renderBetfairConnectorDetails();
+        return;
+      }
+      const livePrice = spec.side === 'LAY' ? res.bestLayPrice : res.bestBackPrice;
+      if (livePrice && livePrice >= 1.01) {
+        updateBetfairCustomOdd(chosenSig.id, +Number(livePrice).toFixed(2), true);
+      }
+      _bfConnectorStatusType = 'success';
+      _bfConnectorStatusMsg = `✅ <b>Link Mercato Fissato esclusivamente per ${chosenMatch.home} - ${chosenMatch.away}:</b> <code>${res.directMarketUrl}</code> (${spec.marketTypeCode} • ${spec.sideLabel})${livePrice ? ` • Quota letta da Betfair: <b>@${Number(livePrice).toFixed(2)}</b>` : ''}.`;
+      renderBetfairConnectorDetails();
+      renderLiveAccordion();
     }
 
     function copyBetfairSearchToClipboard(matchText, marketText) {
@@ -2890,29 +2945,32 @@
       }
 
       _bfConnectorStatusType = 'info';
-      _bfConnectorStatusMsg = `⏳ Interrogazione API Betfair Exchange (<code>listMarketCatalogue</code> + <code>listMarketBook</code>) in corso per <b>${chosenMatch.home} - ${chosenMatch.away}</b> → <b>${chosenSig.selection}</b>...`;
+      _bfConnectorStatusMsg = `⏳ Ricerca rigorosa dell'evento <b>${chosenMatch.home} - ${chosenMatch.away}</b> e lettura quota <code>listMarketBook</code> su Betfair.it...`;
       renderBetfairConnectorDetails();
 
-      const res = await resolveBetfairMarketForSignal(chosenMatch.home, chosenMatch.away, chosenSig.selection);
-      if (res.ok) {
+      const res = await resolveBetfairMarketForSignal(chosenMatch.home, chosenMatch.away, chosenSig.selection, false);
+      if (res.ok && res.verifiedForMatch && res.marketId) {
         const livePrice = res.spec.side === 'LAY' ? res.bestLayPrice : res.bestBackPrice;
         if (livePrice && livePrice >= 1.02) {
           updateBetfairCustomOdd(chosenSig.id, +Number(livePrice).toFixed(2), true);
         }
         const checkOdd = livePrice || betfairCustomOdds[chosenSig.id] || chosenSig.liveOdd || 1.75;
         const gk = evaluateLiveOddGatekeeper(checkOdd, chosenSig);
-        _bfConnectorStatusType = gk.isOddValid ? 'success' : 'warning';
+        const isSuspended = res.marketStatus === 'SUSPENDED' || res.marketStatus === 'CLOSED';
+        _bfConnectorStatusType = (gk.isOddValid && !isSuspended) ? 'success' : 'warning';
         _bfConnectorStatusMsg = [
-          `✅ <b>MERCATO BETFAIR COLLEGATO!</b>`,
-          `• Evento Betfair: <b>${res.eventName}</b> • Mercato: <b>${res.marketName}</b> (ID: <code>${res.marketId}</code>)`,
+          `✅ <b>MERCATO BETFAIR VERIFICATO PER ${chosenMatch.home.toUpperCase()} - ${chosenMatch.away.toUpperCase()}!</b>`,
+          `• Evento Ufficiale Betfair: <b>${res.eventName}</b> • Mercato: <b>${res.marketName}</b> (ID: <code>${res.marketId}</code> • Stato: <b>${res.marketStatus || 'OPEN'}</b>)`,
           `• Selezione Runner: <b>${res.runnerName}</b> (${res.spec.sideLabel})`,
-          livePrice
-            ? `• Quota Reale Live letta da Betfair: <b>@${Number(livePrice).toFixed(2)}</b> vs Soglia Minima <b>≥ @${gk.requiredMinOdd.toFixed(2)}</b> → ${gk.isOddValid ? `<span class="text-[var(--success)] font-bold">🟢 QUOTA VALIDA (+${gk.evalBf.netEvPct}% EV)</span>` : `<span class="text-[var(--error)] font-bold">🛑 QUOTA TROPPO BASSA (${gk.evalBf.netEvPct}% EV • NON SCOMMETTERE ORA)</span>`}`
-            : `• Inserisci o verifica nella casella <b>"📊 Quota vista su Betfair"</b> la quota attuale per il controllo automatico di valore (Min richiesto: <b>≥ @${gk.requiredMinOdd.toFixed(2)}</b>).`
+          isSuspended
+            ? `• 🛑 <b>MERCATO ATTUALMENTE SOSPESO/CHIUSO SU BETFAIR (${res.marketStatus})!</b>`
+            : livePrice
+              ? `• Quota Reale Live letta da Betfair: <b>@${Number(livePrice).toFixed(2)}</b> vs Soglia Minima <b>≥ @${gk.requiredMinOdd.toFixed(2)}</b> → ${gk.isOddValid ? `<span class="text-[var(--success)] font-bold">🟢 QUOTA VALIDA (+${gk.evalBf.netEvPct}% EV)</span>` : `<span class="text-[var(--error)] font-bold">🛑 QUOTA TROPPO BASSA (${gk.evalBf.netEvPct}% EV • NON SCOMMETTERE ORA)</span>`}`
+              : `• Inserisci o verifica nella casella <b>"📊 Quota vista su Betfair"</b> la quota attuale per il controllo automatico di valore (Min richiesto: <b>≥ @${gk.requiredMinOdd.toFixed(2)}</b>).`
         ].join('<br/>');
       } else {
         _bfConnectorStatusType = 'warning';
-        _bfConnectorStatusMsg = `⚠️ <b>Risposta Betfair API:</b> ${res.error}`;
+        _bfConnectorStatusMsg = `⚠️ <b>Verifica Match su Betfair:</b> ${res.error || `Mercato non trovato per ${chosenMatch.home} - ${chosenMatch.away}.`}<br/>💡 <i>Se hai la partita aperta su Betfair.it, incolla il suo link <code>.../market/1.xxxxxx</code> nella casella <b>"🔗 Link di ${chosenMatch.home}"</b> qui sopra e premi <b>"📌 Fissa per questo Match"</b>.</i>`;
       }
       renderBetfairConnectorDetails();
     }
@@ -2930,17 +2988,24 @@
       const cacheKey = `${normalizeTeamName(chosenMatch.home)}|${normalizeTeamName(chosenMatch.away)}|${spec.marketTypeCode}|${spec.side}`;
       let cached = BETFAIR_MARKET_CACHE[cacheKey];
 
-      if (!cached || !cached.marketId) {
-        const res = await resolveBetfairMarketForSignal(chosenMatch.home, chosenMatch.away, chosenSig.selection);
-        if (!res.ok) {
+      if (!cached || !cached.marketId || !cached.verifiedForMatch) {
+        const res = await resolveBetfairMarketForSignal(chosenMatch.home, chosenMatch.away, chosenSig.selection, false);
+        if (!res.ok || !res.verifiedForMatch || !res.marketId) {
           _bfConnectorStatusType = 'warning';
-          _bfConnectorStatusMsg = `⚠️ Prima di inviare un ordine automatico tramite <code>placeOrders</code>, serve il <code>marketId</code> da Betfair API: ${res.error}`;
+          _bfConnectorStatusMsg = `⚠️ Prima di inviare un ordine automatico tramite <code>placeOrders</code>, serve il <code>marketId</code> verificato per <b>${chosenMatch.home} - ${chosenMatch.away}</b>: ${res.error}`;
           renderBetfairConnectorDetails();
           return;
         }
         cached = res;
       } else {
-        await refreshBetfairMarketBookOdds(cached, spec);
+        await refreshBetfairMarketBookOdds(cached, spec, chosenMatch.home, chosenMatch.away);
+      }
+
+      if (cached.eventMismatchWarning) {
+        _bfConnectorStatusType = 'warning';
+        _bfConnectorStatusMsg = `🛑 <b>ORDINE BLOCCATO:</b> ${cached.eventMismatchWarning}`;
+        renderBetfairConnectorDetails();
+        return;
       }
 
       const effectiveOdd = betfairCustomOdds[chosenSig.id] || cached.bestBackPrice || chosenSig.liveOdd || chosenSig.minBetfairOdd || 1.75;
@@ -3061,8 +3126,10 @@
 
     /**
      * Invia su Telegram una notifica di una Partita Live + Pronostico Specifico + Link Diretto Betfair Exchange,
-     * ma CONTROLLA PRIMA LA QUOTA BETFAIR (Gatekeeper): se la quota è inferiore alla soglia minima (es. @1.33 < @1.60),
-     * blocca l'invio del segnale "ENTRA ORA" e avvisa l'utente!
+     * verificando RIGOROSAMENTE:
+     * 1) Che il Market ID appartenga esattamente alla partita selezionata (MAI usare l'ID di un'altra partita come Sorrento-Monopoli su England-France!).
+     * 2) Che il mercato non sia SOSPESO su Betfair.
+     * 3) Che la quota sia >= Soglia Minima Richiesta (Gatekeeper).
      */
     async function sendLiveMatchTestToTelegram(targetMatchKey = null, targetSigId = null, isAutoStartup = false, forceEvenIfLowOdd = false) {
       if (isAutoStartup) return { ok: false, skipped: true };
@@ -3133,7 +3200,6 @@
         chosenSig = chosenMatch.signals.find(s => s.id === sigSel.value);
       }
       if (!chosenSig) {
-        // Se non è stato specificato un segnale, scegli il primo segnale che rispetta la Quota Minima!
         chosenSig = chosenMatch.signals.find(s => evaluateLiveOddGatekeeper(betfairCustomOdds[s.id] || s.liveOdd, s).isOddValid) || chosenMatch.signals[0];
       }
 
@@ -3144,16 +3210,44 @@
         }
       }
 
-      setUiFeedback('info', `⏳ Controllo Quota Betfair in corso per <b>${chosenMatch.home} vs ${chosenMatch.away}</b> → <b>${chosenSig.selection}</b>...`);
+      setUiFeedback('info', `⏳ Verifica rigorosa Market ID &amp; Quota su Betfair.it per <b>${chosenMatch.home} vs ${chosenMatch.away}</b> → <b>${chosenSig.selection}</b>...`);
 
       const spec = mapSelectionToBetfairSpec(chosenSig.selection, chosenMatch.home, chosenMatch.away);
       const cacheKey = `${normalizeTeamName(chosenMatch.home)}|${normalizeTeamName(chosenMatch.away)}|${spec.marketTypeCode}|${spec.side}`;
       let cached = BETFAIR_MARKET_CACHE[cacheKey] || null;
 
       try {
-        const bfRes = await resolveBetfairMarketForSignal(chosenMatch.home, chosenMatch.away, chosenSig.selection, true);
-        if (bfRes && bfRes.ok) cached = bfRes;
+        const bfRes = await resolveBetfairMarketForSignal(chosenMatch.home, chosenMatch.away, chosenSig.selection, false);
+        if (bfRes && bfRes.ok && bfRes.verifiedForMatch && bfRes.marketId) {
+          cached = bfRes;
+        }
       } catch (_) {}
+
+      // BLOCCO 1: Se il Market ID appartiene a un'altra partita o non è verificato per (chosenMatch.home, chosenMatch.away), NON inviare mai un link sbagliato!
+      if (cached?.eventMismatchWarning) {
+        setUiFeedback('warning', `🛑 <b>INVIO BLOCCATO - LINK DI UN'ALTRA PARTITA:</b> ${cached.eventMismatchWarning}`);
+        return { ok: false, error: cached.eventMismatchWarning };
+      }
+
+      if (!cached || !cached.verifiedForMatch || !cached.marketId) {
+        const panel = document.getElementById('betfair-live-connector-panel');
+        if (panel) panel.classList.remove('hidden');
+        setUiFeedback(
+          'warning',
+          `🛑 <b>LINK BETFAIR BLOCCATO PER EVITARE PARTITA ERRATA:</b> Non è stato trovato un Market ID Betfair attivo per <b>${chosenMatch.home} - ${chosenMatch.away}</b> (<code>${spec.marketTypeCode}</code>).<br/>` +
+          `💡 <i>Il sistema non usa più alcun ID di fallback (come <code>1.265408565</code> che apriva <b>Sorrento - Monopoli</b>!). Se <b>${chosenMatch.home} - ${chosenMatch.away}</b> è aperta su Betfair.it, incolla il suo link <code>.../market/1.xxxxxx</code> nella casella <b>"🔗 Link di ${chosenMatch.home}"</b> e premi <b>"📌 Fissa per questo Match"</b>.</i>`
+        );
+        return { ok: false, unverifiedMarket: true };
+      }
+
+      // BLOCCO 2: Se il mercato su Betfair è SOSPESO o CHIUSO (es. @1.01 Sospeso), blocca!
+      if ((cached.marketStatus === 'SUSPENDED' || cached.marketStatus === 'CLOSED') && !forceEvenIfLowOdd) {
+        setUiFeedback(
+          'warning',
+          `🛑 <b>MERCATO ATTUALMENTE ${cached.marketStatus} SU BETFAIR:</b> Il mercato <b>${cached.marketName}</b> (<code>${cached.marketId}</code>) di <b>${cached.eventName}</b> risulta <b>${cached.marketStatus}</b> su Betfair Exchange. Notifica bloccata!`
+        );
+        return { ok: false, marketSuspended: true };
+      }
 
       const apiLiveOdd = cached?.bestBackPrice && spec.side === 'BACK'
         ? cached.bestBackPrice
@@ -3165,8 +3259,8 @@
         betfairCustomOdds[chosenSig.id] = +Number(apiLiveOdd).toFixed(2);
       }
 
-      const effectiveOdd = betfairCustomOdds[chosenSig.id]
-        || apiLiveOdd
+      const effectiveOdd = apiLiveOdd
+        || betfairCustomOdds[chosenSig.id]
         || chosenSig.liveOdd
         || chosenSig.minBetfairOdd
         || 1.75;
@@ -3174,12 +3268,12 @@
       const gk = evaluateLiveOddGatekeeper(effectiveOdd, chosenSig);
       const evalBf = gk.evalBf;
 
-      // GATEKEEPER RIGOROSO SULLA QUOTA: Se su Betfair la quota è es. @1.33 (< @1.60 / < minBetfairOdd), BLOCCA la notifica di ingresso!
+      // BLOCCO 3: GATEKEEPER SULLA QUOTA REALE BETFAIR (es. @1.33 < @1.60)
       if (!gk.isOddValid && !forceEvenIfLowOdd) {
         setUiFeedback(
           'warning',
-          `🛑 <b>NOTIFICA BLOCCATA DAL CONTROLLO QUOTA BETFAIR:</b> Per <b>${chosenMatch.home} - ${chosenMatch.away}</b> (<b>${chosenSig.selection}</b>) la quota attuale su Betfair è <b>@${gk.oddVal.toFixed(2)}</b>, inferiore alla <b>Quota Minima Richiesta ≥ @${gk.requiredMinOdd.toFixed(2)}</b> (EV Netto: <b>${evalBf.netEvPct}%</b>).<br/>` +
-          `💡 <i>Il sistema non invia segnali "ENTRA ORA" quando la quota su Betfair è schiacciata (es. @1.33). Attendi che la quota salga ad almeno <b>@${gk.requiredMinOdd.toFixed(2)}</b>!</i> ` +
+          `🛑 <b>NOTIFICA BLOCCATA DAL CONTROLLO QUOTA BETFAIR:</b> Per <b>${chosenMatch.home} - ${chosenMatch.away}</b> (<b>${chosenSig.selection}</b>, ID verificato <code>${cached.marketId}</code>) la quota attuale su Betfair è <b>@${gk.oddVal.toFixed(2)}</b>, inferiore alla <b>Quota Minima Richiesta ≥ @${gk.requiredMinOdd.toFixed(2)}</b> (EV Netto: <b>${evalBf.netEvPct}%</b>).<br/>` +
+          `💡 <i>Il sistema non invia segnali "ENTRA ORA" quando la quota su Betfair è sotto soglia (es. @1.33). Attendi che la quota salga ad almeno <b>@${gk.requiredMinOdd.toFixed(2)}</b>!</i> ` +
           `<button onclick="sendLiveMatchTestToTelegram('${chosenMatch.key}', '${chosenSig.id}', false, true)" class="ml-2 px-2 py-0.5 rounded bg-[var(--secondary)] border border-[var(--border)] text-[var(--foreground)] font-bold hover:border-[var(--warning)]">Invia comunque avviso Quota Bassa su Telegram</button>`
         );
         return { ok: false, blockedByOdd: true, odd: gk.oddVal, requiredMinOdd: gk.requiredMinOdd };
@@ -3187,7 +3281,7 @@
 
       const stakeEuro = gk.isOddValid ? Math.max(15, evalBf.kelly.euro || 25) : 0;
 
-      const finalMktId = cached?.marketId || getSavedDefaultBetfairMarketId();
+      const finalMktId = cached.marketId;
       const directApexUrl = `https://salvo061978.github.io/apex-edge-betting/#live=${encodeURIComponent(chosenMatch.matchId)}&sig=${encodeURIComponent(chosenSig.id)}`;
       const directBetfairUrl = buildBetfairMarketUrl(finalMktId);
       const displayMatchTitle = cached?.eventName ? `${cached.eventName}` : `${chosenMatch.home} vs ${chosenMatch.away}`;
@@ -3202,7 +3296,7 @@
       const semDisplay = liveObj?.semaphore?.score || chosenMatch.semScore || 84;
 
       const headerLine = gk.isOddValid
-        ? `🟢🔥 <b>APEX EDGE • SEGNALE PARTITA LIVE (QUOTA VERIFICATA ≥ @${gk.requiredMinOdd.toFixed(2)})</b>`
+        ? `🟢🔥 <b>APEX EDGE • SEGNALE PARTITA LIVE (MATCH &amp; QUOTA VERIFICATI ≥ @${gk.requiredMinOdd.toFixed(2)})</b>`
         : `🛑⏳ <b>APEX EDGE • AVVISO QUOTA BASSA SU BETFAIR (@${gk.oddVal.toFixed(2)} &lt; @${gk.requiredMinOdd.toFixed(2)} • NON ENTRARE ORA)</b>`;
 
       const oddStatusLine = gk.isOddValid
@@ -3221,7 +3315,7 @@
         `🎯 Pronostico: <b>${chosenSig.selection}</b>`,
         `🧠 Strategia: <code>${chosenSig.signalType}</code>`,
         `🟡 Mercato Betfair: <code>${spec.marketTypeCode}</code> → <b>${cached?.marketName || spec.marketLabelIt}</b>`,
-        `📌 Lato &amp; Runner Betfair: <b>${spec.sideLabel}</b> su <b>${cached?.runnerName || spec.runnerDisplay}</b> (Market ID: <code>${finalMktId}</code>)`,
+        `📌 Lato &amp; Runner Betfair: <b>${spec.sideLabel}</b> su <b>${cached?.runnerName || spec.runnerDisplay}</b> (Market ID Verificato: <code>${finalMktId}</code>)`,
         oddStatusLine,
         `💶 Stake Kelly Consigliato: <b>${gk.isOddValid ? `€${stakeEuro}` : '€0 (NO-BET finché la quota non sale)'}</b>`,
         ``,
@@ -3235,13 +3329,13 @@
       ].join('\n');
 
       const inlineBtns = [
-        [{ text: `🟡 APRI MERCATO BETFAIR (${finalMktId})`, url: directBetfairUrl }],
+        [{ text: `🟡 APRI ${displayMatchTitle.toUpperCase()} SU BETFAIR (${finalMktId})`, url: directBetfairUrl }],
         [{ text: `📲 APRI PARTITA LIVE SU APEX EDGE`, url: directApexUrl }]
       ];
 
       const r = await sendTelegramMessage(msg, cfg, inlineBtns);
       if (r.ok) {
-        setUiFeedback('success', `✅ <b>Notifica Partita Live inviata su Telegram!</b> (Quota verificata: <b>@${gk.oddVal.toFixed(2)}</b> vs Min <b>≥ @${gk.requiredMinOdd.toFixed(2)}</b> • Link Diretto: <code>${directBetfairUrl}</code>).`);
+        setUiFeedback('success', `✅ <b>Notifica Partita Live inviata su Telegram!</b> (Match verificato: <b>${displayMatchTitle}</b> • Quota: <b>@${gk.oddVal.toFixed(2)}</b> • Link: <code>${directBetfairUrl}</code>).`);
       } else {
         setUiFeedback('error', `❌ <b>Errore invio Telegram:</b> ${r.error}`);
       }
@@ -3260,19 +3354,33 @@
       const matchId = m?.id || String(snap.id || '').replace(/^snap-/, '');
       const apexLiveUrl = `https://salvo061978.github.io/apex-edge-betting/#live=${encodeURIComponent(matchId)}`;
 
-      // Risolve il Market ID specifico E controlla la quota reale via listMarketBook prima di inviare!
-      let resolvedMktId = getSavedDefaultBetfairMarketId();
-      let apiPrice = null;
+      // Risolve rigorosamente il Market ID specifico di QUESTA partita (m.home vs m.away) E controlla la quota reale via listMarketBook!
+      let bfRes = null;
       const bfSpec = mapSelectionToBetfairSpec(snap.selection, m?.home || '', m?.away || '');
       if (m?.home && m?.away) {
         try {
-          const bfRes = await resolveBetfairMarketForSignal(m.home, m.away, snap.selection);
-          if (bfRes && bfRes.ok) {
-            if (bfRes.marketId) resolvedMktId = bfRes.marketId;
-            apiPrice = bfSpec.side === 'LAY' ? bfRes.bestLayPrice : bfRes.bestBackPrice;
-          }
+          bfRes = await resolveBetfairMarketForSignal(m.home, m.away, snap.selection, false);
         } catch (_) {}
       }
+
+      // BLOCCO RIGOROSO 1: Se non abbiamo un Market ID verificato che appartiene davvero a (m.home vs m.away), NON inviare notifiche con link di altre partite!
+      if (!bfRes || !bfRes.ok || !bfRes.verifiedForMatch || !bfRes.marketId || bfRes.eventMismatchWarning) {
+        snap._tgSending = false;
+        snap.resolutionNote = `⏳ In attesa di verifica Market ID Betfair specifico per ${snap.match} (nessun ID di altre partite utilizzato).`;
+        saveUiState();
+        return false;
+      }
+
+      // BLOCCO RIGOROSO 2: Se il mercato su Betfair è SOSPESO o CHIUSO (es. @1.01 Sospeso), NON inviare la notifica!
+      if (bfRes.marketStatus === 'SUSPENDED' || bfRes.marketStatus === 'CLOSED') {
+        snap._tgSending = false;
+        snap.resolutionNote = `🛑 Notifica Telegram bloccata: mercato ${bfRes.marketId} attualmente ${bfRes.marketStatus} su Betfair.`;
+        saveUiState();
+        return false;
+      }
+
+      const resolvedMktId = bfRes.marketId;
+      const apiPrice = bfSpec.side === 'LAY' ? bfRes.bestLayPrice : bfRes.bestBackPrice;
 
       const topSig = (m?.liveSignals || []).find(s => s.selection === snap.selection) || (m?.liveSignals || [])[0];
       const currentBfOdd = Number(
@@ -3288,7 +3396,7 @@
         minOperationalOdd: topSig?.minOperationalOdd || 1.60
       });
 
-      // BLOCCO RIGOROSO: Se su Betfair la quota attuale è sotto la soglia minima (es. @1.33 < @1.60), NON inviare la notifica!
+      // BLOCCO RIGOROSO 3: Se su Betfair la quota attuale è sotto la soglia minima (es. @1.33 < @1.60), NON inviare la notifica!
       if (!gk.isOddValid) {
         snap._tgSending = false;
         snap.triggerStatus = 'BLOCKED_NO_BET';
@@ -3303,10 +3411,10 @@
 
       const msg = [
         `🟢🔥 <b>ENTRA ORA • SEMAFORO VERDE (${snap.triggerScore}/100)</b>`,
-        `⚽ <b>${snap.match}</b> (${snap.league})`,
+        `⚽ <b>${bfRes.eventName || snap.match}</b> (${snap.league})`,
         `⏱️ Minuto: <b>${snap.triggerMinute}</b> • Risultato: <b>${snap.scoreAtTrigger}</b>`,
         '',
-        `🎯 Mercato: <b>${snap.selection}</b> (<code>${bfSpec.marketTypeCode}</code> • ${bfSpec.sideLabel} • ID: <code>${resolvedMktId}</code>)`,
+        `🎯 Mercato: <b>${snap.selection}</b> (<code>${bfSpec.marketTypeCode}</code> • ${bfSpec.sideLabel} • ID Verificato: <code>${resolvedMktId}</code>)`,
         `✅ Quota Betfair Verificata: <b>@${gk.oddVal.toFixed(2)}</b> (Min richiesta: <b>≥ @${gk.requiredMinOdd.toFixed(2)}</b> • Fair: <b>@${gk.fairVal.toFixed(2)}</b> • <b>+${gk.evalBf.netEvPct}% EV</b>)`,
         `📈 Telemetria: ${snap.statsAtTrigger}`,
         `🔗 Pre-Match: ${snap.preMatchConvergence}`,
@@ -6522,9 +6630,16 @@
 
       Promise.resolve(syncRealLiveMatchesFromFotmob(true)).finally(() => {
         try {
-          const savedMktCache = JSON.parse(localStorage.getItem('apex_betfair_market_cache') || '{}');
+          // Pulisce la vecchia cache che conteneva il Market ID di fallback 1.265408565 (Sorrento - Monopoli) associato ad altre partite
+          localStorage.removeItem('apex_betfair_market_cache');
+          localStorage.removeItem('apex_last_betfair_market_id');
+          const savedMktCache = JSON.parse(localStorage.getItem('apex_betfair_market_cache_v3_strict') || '{}');
           if (savedMktCache && typeof savedMktCache === 'object') {
-            Object.assign(BETFAIR_MARKET_CACHE, savedMktCache);
+            for (const [k, v] of Object.entries(savedMktCache)) {
+              if (v && v.verifiedForMatch && v.marketId && !v.eventMismatchWarning) {
+                BETFAIR_MARKET_CACHE[k] = v;
+              }
+            }
           }
         } catch (_) {}
         if (initialHash) {

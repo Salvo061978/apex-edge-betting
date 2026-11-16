@@ -2904,7 +2904,7 @@
       a.click();
     }
 
-    async function sendTelegramMessage(htmlText, overrideCfg = null) {
+    async function sendTelegramMessage(htmlText, overrideCfg = null, inlineButtons = null) {
       const cfg = overrideCfg || getTelegramLocalConfig();
       if (!cfg.botToken || !cfg.chatId) return { ok: false, error: 'Token o Chat ID mancanti' };
       try {
@@ -2916,6 +2916,9 @@
         };
         if (cfg.threadId && /^\d+$/.test(cfg.threadId)) {
           payload.message_thread_id = parseInt(cfg.threadId, 10);
+        }
+        if (Array.isArray(inlineButtons) && inlineButtons.length > 0) {
+          payload.reply_markup = { inline_keyboard: inlineButtons };
         }
         const res = await fetch(`https://api.telegram.org/bot${encodeURIComponent(cfg.botToken)}/sendMessage`, {
           method: 'POST',
@@ -3056,12 +3059,21 @@
         `💎 Quota Fair: <b>@${Number(chosenSig.fairOdd || 1.56).toFixed(2)}</b> • Target Betfair: <b>≥ @${Number(effectiveOdd).toFixed(2)}</b> (+${evalBf.netEvPct}% EV Netto)`,
         `💶 Stake Kelly Consigliato: <b>€${stakeEuro}</b>`,
         ``,
-        `🟡 <b>Link Diretto Mercato Betfair:</b>`,
+        `━━━━━━━━━━━━━━━━━━━━`,
+        `🟡 <b>1) SCOMMETTI ORA SU BETFAIR EXCHANGE:</b>`,
         `<a href="${directBetfairUrl}">${directBetfairUrl}</a>`,
-        `📲 <a href="${directApexUrl}">Apri Partita &amp; Pronostico Diretto su APEX EDGE</a>`
+        ``,
+        `━━━━━━━━━━━━━━━━━━━━`,
+        `📲 <b>2) APRI TELEMETRIA &amp; PRONOSTICO SU APEX EDGE:</b>`,
+        `<a href="${directApexUrl}">👉 Tocca qui per aprire la Partita Live su APEX EDGE</a>`
       ].join('\n');
 
-      const r = await sendTelegramMessage(msg, cfg);
+      const inlineBtns = [
+        [{ text: `🟡 APRI MERCATO BETFAIR (${finalMktId})`, url: directBetfairUrl }],
+        [{ text: `📲 APRI PARTITA LIVE SU APEX EDGE`, url: directApexUrl }]
+      ];
+
+      const r = await sendTelegramMessage(msg, cfg, inlineBtns);
       if (r.ok) {
         setUiFeedback('success', `✅ <b>Notifica Partita Live inviata su Telegram!</b> (${displayMatchTitle} → <b>${chosenSig.selection}</b> • Link Diretto: <code>${directBetfairUrl}</code>). Controlla subito la tua chat Telegram!`);
       } else {
@@ -3105,11 +3117,19 @@
         `📈 Telemetria: ${snap.statsAtTrigger}`,
         `🔗 Pre-Match: ${snap.preMatchConvergence}`,
         '',
-        `🟡 <b>Link Diretto Mercato Betfair:</b>`,
+        `━━━━━━━━━━━━━━━━━━━━`,
+        `🟡 <b>1) SCOMMETTI ORA SU BETFAIR EXCHANGE:</b>`,
         `<a href="${betfairUrl}">${betfairUrl}</a>`,
-        `📲 <a href="${apexLiveUrl}">Apri Partita Live su APEX EDGE</a>`
+        '',
+        `━━━━━━━━━━━━━━━━━━━━`,
+        `📲 <b>2) APRI TELEMETRIA LIVE SU APEX EDGE:</b>`,
+        `<a href="${apexLiveUrl}">👉 Tocca qui per aprire la Partita Live su APEX EDGE</a>`
       ].join('\n');
-      const res = await sendTelegramMessage(msg, cfg);
+      const inlineBtns = [
+        [{ text: `🟡 APRI MERCATO BETFAIR (${resolvedMktId})`, url: betfairUrl }],
+        [{ text: `📲 APRI PARTITA LIVE SU APEX EDGE`, url: apexLiveUrl }]
+      ];
+      const res = await sendTelegramMessage(msg, cfg, inlineBtns);
       snap._tgSending = false;
       if (res && res.ok) {
         snap.telegramNotified = true;
@@ -6269,8 +6289,8 @@
         }
         try {
           const tgCfg = getTelegramLocalConfig();
-          if (tgCfg.botToken && tgCfg.chatId && !localStorage.getItem('apex_live_tg_test_sent_v5')) {
-            localStorage.setItem('apex_live_tg_test_sent_v5', '1');
+          if (tgCfg.botToken && tgCfg.chatId && !localStorage.getItem('apex_live_tg_test_sent_v6')) {
+            localStorage.setItem('apex_live_tg_test_sent_v6', '1');
             sendLiveMatchTestToTelegram(null, null, true);
           }
         } catch (_) {}

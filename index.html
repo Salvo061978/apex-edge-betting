@@ -2299,10 +2299,92 @@
       return null;
     }
 
+    async function refreshBetfairMarketBookOdds(resolvedObj, specOverride = null) {
+      if (!resolvedObj || !resolvedObj.marketId) return resolvedObj;
+      const spec = specOverride || resolvedObj.spec || {};
+      const now = Date.now();
+      if (resolvedObj._lastBookTs && (now - resolvedObj._lastBookTs < 10000) && (resolvedObj.bestBackPrice || resolvedObj.bestLayPrice)) {
+        return resolvedObj;
+      }
+
+      // Se non abbiamo ancora il selectionId (es. Market ID inserito manualmente 1.265408565), leggiamo il catalogo di quello specifico marketId (peso = 1 pt)
+      if (!resolvedObj.selectionId) {
+        try {
+          const singleCatRes = await callBetfairExchangeApi('listMarketCatalogue', {
+            filter: { marketIds: [resolvedObj.marketId] },
+            marketProjection: ['EVENT', 'RUNNER_DESCRIPTION'],
+            maxResults: '1'
+          });
+          if (singleCatRes.ok && Array.isArray(singleCatRes.data) && singleCatRes.data[0]) {
+            const cat = singleCatRes.data[0];
+            if (cat.event?.name) resolvedObj.eventName = cat.event.name;
+            if (cat.marketName) resolvedObj.marketName = cat.marketName;
+            const runners = cat.runners || [];
+            let chosenRunner = null;
+            for (const r of runners) {
+              const rName = String(r.runnerName || '').toLowerCase();
+              if (spec.isTeamRunner && teamNamesMatch(r.runnerName, spec.targetTeam)) {
+                chosenRunner = r;
+                break;
+              }
+              if ((spec.runnerCandidates || []).some(cand => rName === cand || rName.includes(cand))) {
+                chosenRunner = r;
+                break;
+              }
+            }
+            if (!chosenRunner && runners.length >= 2 && String(spec.runnerDisplay || '').toLowerCase().includes('over')) {
+              chosenRunner = runners[1];
+            } else if (!chosenRunner && runners.length > 0) {
+              chosenRunner = runners[0];
+            }
+            if (chosenRunner) {
+              resolvedObj.selectionId = chosenRunner.selectionId;
+              resolvedObj.runnerName = chosenRunner.runnerName;
+            }
+          }
+        } catch (_) {}
+      }
+
+      try {
+        const bookRes = await callBetfairExchangeApi('listMarketBook', {
+          marketIds: [resolvedObj.marketId],
+          priceProjection: { priceData: ['EX_BEST_OFFERS'] }
+        });
+        if (bookRes.ok && Array.isArray(bookRes.data) && bookRes.data[0]) {
+          const mBook = bookRes.data[0];
+          const runners = mBook.runners || [];
+          const wantOver = String(spec.runnerDisplay || '').toLowerCase().includes('over') || String(spec.runnerDisplay || '').toLowerCase().includes('più');
+          let rBook = runners.find(rb => resolvedObj.selectionId && rb.selectionId === resolvedObj.selectionId);
+          if (!rBook && runners.length >= 2 && wantOver) {
+            rBook = runners[1];
+          }
+          if (!rBook && runners.length > 0) {
+            rBook = runners[0];
+          }
+          if (rBook) {
+            if (!resolvedObj.selectionId) resolvedObj.selectionId = rBook.selectionId;
+            const back0 = rBook.ex?.availableToBack?.[0];
+            const lay0 = rBook.ex?.availableToLay?.[0];
+            if (back0 && back0.price) {
+              resolvedObj.bestBackPrice = back0.price;
+              resolvedObj.bestBackSize = back0.size;
+            }
+            if (lay0 && lay0.price) {
+              resolvedObj.bestLayPrice = lay0.price;
+              resolvedObj.bestLaySize = lay0.size;
+            }
+            resolvedObj._lastBookTs = now;
+          }
+        }
+      } catch (_) {}
+      return resolvedObj;
+    }
+
     async function resolveBetfairMarketForSignal(homeTeam, awayTeam, selection, allowAnyInPlayFallback = false) {
       const spec = mapSelectionToBetfairSpec(selection, homeTeam, awayTeam);
       const cacheKey = `${normalizeTeamName(homeTeam)}|${normalizeTeamName(awayTeam)}|${spec.marketTypeCode}|${spec.side}`;
       if (BETFAIR_MARKET_CACHE[cacheKey]?.directMarketUrl && BETFAIR_MARKET_CACHE[cacheKey]?.marketId) {
+        await refreshBetfairMarketBookOdds(BETFAIR_MARKET_CACHE[cacheKey], spec);
         return BETFAIR_MARKET_CACHE[cacheKey];
       }
 
@@ -2364,6 +2446,7 @@
           directMarketUrl: buildBetfairMarketUrl(fallbackMktId),
           directEventUrl: buildBetfairMarketUrl(fallbackMktId)
         };
+        await refreshBetfairMarketBookOdds(fallbackResolved, spec);
         BETFAIR_MARKET_CACHE[cacheKey] = fallbackResolved;
         return fallbackResolved;
       }
@@ -2399,7 +2482,7 @@
 
       if (matchingCats.length === 0) {
         const fallbackMktId = getSavedDefaultBetfairMarketId();
-        return {
+        const fallbackObj = {
           ok: true,
           spec,
           eventId: '',
@@ -2413,6 +2496,9 @@
           directMarketUrl: buildBetfairMarketUrl(fallbackMktId),
           directEventUrl: buildBetfairMarketUrl(fallbackMktId)
         };
+        await refreshBetfairMarketBookOdds(fallbackObj, spec);
+        BETFAIR_MARKET_CACHE[cacheKey] = fallbackObj;
+        return fallbackObj;
       }
 
       const chosenCat = matchingCats[0];
@@ -2429,7 +2515,11 @@
           break;
         }
       }
-      if (!chosenRunner && runners.length > 0) chosenRunner = runners[0];
+      if (!chosenRunner && runners.length >= 2 && String(spec.runnerDisplay || '').toLowerCase().includes('over')) {
+        chosenRunner = runners[1];
+      } else if (!chosenRunner && runners.length > 0) {
+        chosenRunner = runners[0];
+      }
 
       try {
         if (chosenCat.marketId) localStorage.setItem('apex_last_betfair_market_id', chosenCat.marketId);
@@ -2452,28 +2542,7 @@
         directEventUrl: buildBetfairMarketUrl(chosenCat.marketId)
       };
 
-      // Leggi anche il book live (listMarketBook) per ottenere la quota reale Punta/Banca
-      const bookRes = await callBetfairExchangeApi('listMarketBook', {
-        marketIds: [chosenCat.marketId],
-        priceProjection: { priceData: ['EX_BEST_OFFERS'] }
-      });
-      if (bookRes.ok && Array.isArray(bookRes.data) && bookRes.data[0]) {
-        const mBook = bookRes.data[0];
-        const rBook = (mBook.runners || []).find(rb => rb.selectionId === resolved.selectionId) || (mBook.runners || [])[0];
-        if (rBook) {
-          const back0 = rBook.ex?.availableToBack?.[0];
-          const lay0 = rBook.ex?.availableToLay?.[0];
-          if (back0) {
-            resolved.bestBackPrice = back0.price;
-            resolved.bestBackSize = back0.size;
-          }
-          if (lay0) {
-            resolved.bestLayPrice = lay0.price;
-            resolved.bestLaySize = lay0.size;
-          }
-        }
-      }
-
+      await refreshBetfairMarketBookOdds(resolved, spec);
       BETFAIR_MARKET_CACHE[cacheKey] = resolved;
       return resolved;
     }
@@ -2620,6 +2689,48 @@
       renderBetfairConnectorDetails();
     }
 
+    function evaluateLiveOddGatekeeper(effectiveOdd, sig) {
+      const oddVal = Number(effectiveOdd || 0);
+      const fairVal = Number(sig?.fairOdd || 1.56);
+      const minMathOdd = Number(sig?.minBetfairOdd || calcMinBetfairBackOdd(fairVal, 0.05));
+      const minOpOdd = Number(sig?.minOperationalOdd || 1.60);
+      const requiredMinOdd = +(Math.max(minMathOdd, minOpOdd)).toFixed(2);
+      const evalBf = evaluateBetfairBackOdd(oddVal, fairVal);
+      const isOddValid = oddVal >= requiredMinOdd && evalBf.netEvPct >= 0;
+      return {
+        oddVal: +oddVal.toFixed(2),
+        fairVal: +fairVal.toFixed(2),
+        minMathOdd: +minMathOdd.toFixed(2),
+        minOpOdd: +minOpOdd.toFixed(2),
+        requiredMinOdd,
+        evalBf,
+        isOddValid
+      };
+    }
+
+    function applyManualBetfairOddFromInput(sigId) {
+      const inp = document.getElementById('bf-manual-liveodd-input');
+      if (!inp) return;
+      const val = parseFloat(String(inp.value).replace(',', '.'));
+      if (isNaN(val) || val < 1.01) return;
+      updateBetfairCustomOdd(sigId, val, true);
+      const pool = getConnectorMatchPool();
+      const matchSel = document.getElementById('bf-conn-match-select');
+      const chosenMatch = pool.find(p => p.key === matchSel?.value) || pool[0];
+      const chosenSig = chosenMatch?.signals.find(s => s.id === sigId) || chosenMatch?.signals[0];
+      if (chosenSig) {
+        const gk = evaluateLiveOddGatekeeper(val, chosenSig);
+        if (!gk.isOddValid) {
+          _bfConnectorStatusType = 'warning';
+          _bfConnectorStatusMsg = `🛑 <b>BLOCCO QUOTA BETFAIR ATTIVO (@${gk.oddVal.toFixed(2)} &lt; @${gk.requiredMinOdd.toFixed(2)}):</b> Hai impostato la quota reale vista su Betfair (<b>@${gk.oddVal.toFixed(2)}</b>). Poiché è inferiore alla <b>Quota Minima Richiesta (≥ @${gk.requiredMinOdd.toFixed(2)})</b> ed ha valore atteso negativo (<b>${gk.evalBf.netEvPct}% EV</b>), il Semaforo Live e le notifiche Telegram bloccano l'ingresso finché la quota non sale!`;
+        } else {
+          _bfConnectorStatusType = 'success';
+          _bfConnectorStatusMsg = `🟢 <b>QUOTA BETFAIR VALIDA (@${gk.oddVal.toFixed(2)} ≥ @${gk.requiredMinOdd.toFixed(2)}):</b> Valore matematico positivo (<b>+${gk.evalBf.netEvPct}% EV Netto</b>). Notifica Telegram e ingresso abilitati!`;
+        }
+        renderBetfairConnectorDetails();
+      }
+    }
+
     function renderBetfairConnectorDetails() {
       const box = document.getElementById('bf-conn-details-box');
       const matchSel = document.getElementById('bf-conn-match-select');
@@ -2632,18 +2743,19 @@
       const chosenSig = chosenMatch.signals.find(s => s.id === sigSel.value) || chosenMatch.signals[0];
       if (!chosenSig) return;
 
-      const cfg = getBetfairLocalConfig();
       const spec = mapSelectionToBetfairSpec(chosenSig.selection, chosenMatch.home, chosenMatch.away);
       const cacheKey = `${normalizeTeamName(chosenMatch.home)}|${normalizeTeamName(chosenMatch.away)}|${spec.marketTypeCode}|${spec.side}`;
       const cached = BETFAIR_MARKET_CACHE[cacheKey] || null;
 
-      const effectiveOdd = cached?.bestBackPrice && spec.side === 'BACK'
-        ? cached.bestBackPrice
-        : cached?.bestLayPrice && spec.side === 'LAY'
-          ? cached.bestLayPrice
-          : (betfairCustomOdds[chosenSig.id] || chosenSig.liveOdd || chosenSig.minBetfairOdd || 1.75);
-      const evalBf = evaluateBetfairBackOdd(effectiveOdd, chosenSig.fairOdd || 1.55);
-      const stakeEuro = Math.max(10, evalBf.kelly.euro || 20);
+      const effectiveOdd = betfairCustomOdds[chosenSig.id]
+        || (cached?.bestBackPrice && spec.side === 'BACK' ? cached.bestBackPrice : null)
+        || (cached?.bestLayPrice && spec.side === 'LAY' ? cached.bestLayPrice : null)
+        || chosenSig.liveOdd
+        || chosenSig.minBetfairOdd
+        || 1.75;
+      const gk = evaluateLiveOddGatekeeper(effectiveOdd, chosenSig);
+      const evalBf = gk.evalBf;
+      const stakeEuro = gk.isOddValid ? Math.max(10, evalBf.kelly.euro || 20) : 0;
 
       const activeMktId = cached?.marketId || getSavedDefaultBetfairMarketId();
       const directTargetUrl = cached?.directMarketUrl || buildBetfairMarketUrl(activeMktId);
@@ -2666,20 +2778,33 @@
               <div class="font-bold text-[var(--success)] truncate">${spec.sideLabel}</div>
               <div class="text-[10px] text-[var(--foreground)] truncate">${spec.runnerDisplay}</div>
             </div>
-            <div class="p-2 rounded bg-[var(--primary)]/10 border border-[var(--primary)]/40">
-              <div class="text-[10px] text-[var(--primary)] font-bold">MARKET ID &amp; QUOTA</div>
-              <div class="font-bold text-[var(--foreground)]">ID: ${activeMktId}</div>
-              <div class="text-[10px] text-[var(--success)] font-bold">@${Number(effectiveOdd).toFixed(2)} • Stake €${stakeEuro}</div>
+            <div class="p-2 rounded ${gk.isOddValid ? 'bg-[var(--success)]/15 border border-[var(--success)]/50' : 'bg-[var(--error)]/15 border border-[var(--error)]/50'}">
+              <div class="text-[10px] ${gk.isOddValid ? 'text-[var(--success)]' : 'text-[var(--error)]'} font-bold">CONTROLLO QUOTA BETFAIR</div>
+              <div class="font-bold text-[var(--foreground)]">Attuale: @${gk.oddVal.toFixed(2)} vs Min ≥ @${gk.requiredMinOdd.toFixed(2)}</div>
+              <div class="text-[10px] ${gk.isOddValid ? 'text-[var(--success)]' : 'text-[var(--error)]'} font-bold">
+                ${gk.isOddValid ? `🟢 VALIDA (+${evalBf.netEvPct}% EV • €${stakeEuro})` : `🛑 TROPPO BASSA (${evalBf.netEvPct}% EV • NO-BET)`}
+              </div>
             </div>
           </div>
 
-          <!-- Inserimento Rapido Market ID / Link Diretto Betfair (formato ufficiale /exchange/plus/football/market/1.xxxxxx) -->
-          <div class="flex flex-wrap items-center gap-2 p-2 rounded-lg bg-[var(--background)] border border-[var(--border)] text-xs">
-            <span class="font-mono text-[11px] text-[var(--muted-foreground)]">🔗 Link / Market ID Betfair:</span>
-            <input id="bf-manual-marketid-input" type="text" value="${directTargetUrl}" placeholder="https://www.betfair.it/exchange/plus/football/market/1.265408565" class="flex-1 min-w-[230px] bg-[var(--card)] border border-[var(--border)] rounded px-2 py-1 font-mono text-xs text-[var(--foreground)]" />
-            <button onclick="applyManualBetfairMarketFromInput()" class="px-2.5 py-1 rounded bg-[var(--warning)]/20 text-[var(--warning)] border border-[var(--warning)]/50 font-bold hover:bg-[var(--warning)] hover:text-black transition">
-              📌 Fissa Link Mercato
-            </button>
+          <!-- Controllo Quota Reale Betfair + Link Mercato -->
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <div class="flex flex-wrap items-center gap-2 p-2 rounded-lg bg-[var(--background)] border ${gk.isOddValid ? 'border-[var(--success)]/50' : 'border-[var(--error)]/60'} text-xs">
+              <span class="font-mono text-[11px] font-bold ${gk.isOddValid ? 'text-[var(--success)]' : 'text-[var(--error)]'}">📊 Quota vista su Betfair:</span>
+              <input id="bf-manual-liveodd-input" type="number" step="0.01" min="1.01" max="50" value="${gk.oddVal.toFixed(2)}" class="w-20 bg-[var(--card)] border border-[var(--primary)] rounded px-2 py-1 font-mono font-bold text-xs text-center text-[var(--foreground)]" />
+              <button onclick="applyManualBetfairOddFromInput('${chosenSig.id}')" class="px-2.5 py-1 rounded bg-[var(--primary)] text-[var(--primary-foreground)] font-bold hover:opacity-90 transition">
+                ⚡ Verifica Quota
+              </button>
+              <span class="font-mono text-[10px] text-[var(--muted-foreground)]">Min richiesta: <b>≥ @${gk.requiredMinOdd.toFixed(2)}</b></span>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-2 p-2 rounded-lg bg-[var(--background)] border border-[var(--border)] text-xs">
+              <span class="font-mono text-[11px] text-[var(--muted-foreground)]">🔗 Link Mercato:</span>
+              <input id="bf-manual-marketid-input" type="text" value="${directTargetUrl}" placeholder="https://www.betfair.it/exchange/plus/football/market/1.265408565" class="flex-1 min-w-[170px] bg-[var(--card)] border border-[var(--border)] rounded px-2 py-1 font-mono text-xs text-[var(--foreground)]" />
+              <button onclick="applyManualBetfairMarketFromInput()" class="px-2.5 py-1 rounded bg-[var(--warning)]/20 text-[var(--warning)] border border-[var(--warning)]/50 font-bold hover:bg-[var(--warning)] hover:text-black transition">
+                📌 Fissa Link
+              </button>
+            </div>
           </div>
 
           ${_bfConnectorStatusMsg ? `
@@ -2702,11 +2827,11 @@
               <a href="${directTargetUrl}" target="_blank" rel="noopener noreferrer" onclick="copyBetfairSearchToClipboard('${chosenMatch.home.replace(/'/g, "\\'")} - ${chosenMatch.away.replace(/'/g, "\\'")}', '${spec.marketLabelIt.replace(/'/g, "\\'")}')" class="px-3 py-2 rounded-lg bg-[var(--warning)] text-black font-bold text-xs hover:opacity-90 transition inline-flex items-center gap-1.5 no-underline">
                 <span>🟡 2. ${cached?.marketId ? `Apri Mercato Diretto (${cached.marketId}) su Betfair.it` : 'Apri su Betfair.it (Copia Match & Mercato)'} ↗</span>
               </a>
-              <button onclick="triggerBetfairPlaceOrder()" class="px-3 py-2 rounded-lg bg-[var(--success)] text-white font-bold text-xs hover:opacity-90 transition flex items-center gap-1.5">
-                <span>🚀 3. Invia Ordine API (${spec.side} @${Number(effectiveOdd).toFixed(2)} • €${stakeEuro})</span>
+              <button onclick="triggerBetfairPlaceOrder()" class="px-3 py-2 rounded-lg ${gk.isOddValid ? 'bg-[var(--success)] text-white' : 'bg-[var(--secondary)] text-[var(--muted-foreground)] border border-[var(--border)]'} font-bold text-xs hover:opacity-90 transition flex items-center gap-1.5">
+                <span>${gk.isOddValid ? `🚀 3. Invia Ordine API (${spec.side} @${gk.oddVal.toFixed(2)} • €${stakeEuro})` : `🛑 3. Ordine Bloccato (Quota @${gk.oddVal.toFixed(2)} < @${gk.requiredMinOdd.toFixed(2)})`}</span>
               </button>
               <button onclick="sendLiveMatchTestToTelegram('${chosenMatch.key}', '${chosenSig.id}', false)" class="px-3 py-2 rounded-lg bg-[#38bdf8] text-black font-bold text-xs hover:opacity-90 transition flex items-center gap-1.5">
-                <span>📲 4. Invia Prova su Telegram di Questa Partita</span>
+                <span>📲 4. Verifica Quota &amp; Invia su Telegram</span>
               </button>
             </div>
             <button onclick="downloadLocalBetfairBridgeScript()" class="px-2.5 py-1.5 rounded-lg bg-[var(--secondary)] border border-[var(--border)] text-[11px] font-mono text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
@@ -2731,7 +2856,7 @@
       const res = setManualBetfairMarketId(cacheKey, inp.value, chosenMatch.home, chosenMatch.away, chosenSig.selection);
       if (res) {
         _bfConnectorStatusType = 'success';
-        _bfConnectorStatusMsg = `✅ <b>Link Diretto Mercato Betfair Fissato:</b> <code>${res.directMarketUrl}</code> (${spec.marketTypeCode} • ${spec.sideLabel}). Ora premi <b>"📲 4. Invia Prova su Telegram di Questa Partita"</b> per riceverlo su Telegram!`;
+        _bfConnectorStatusMsg = `✅ <b>Link Diretto Mercato Betfair Fissato:</b> <code>${res.directMarketUrl}</code> (${spec.marketTypeCode} • ${spec.sideLabel}). Ora verifica la quota reale e premi <b>"📲 4. Verifica Quota &amp; Invia su Telegram"</b>!`;
         renderBetfairConnectorDetails();
         renderLiveAccordion();
       }
@@ -2765,32 +2890,25 @@
       }
 
       _bfConnectorStatusType = 'info';
-      _bfConnectorStatusMsg = `⏳ Interrogazione API Betfair Exchange (<code>listMarketCatalogue</code>) in corso per <b>${chosenMatch.home} - ${chosenMatch.away}</b> → <b>${chosenSig.selection}</b>...`;
+      _bfConnectorStatusMsg = `⏳ Interrogazione API Betfair Exchange (<code>listMarketCatalogue</code> + <code>listMarketBook</code>) in corso per <b>${chosenMatch.home} - ${chosenMatch.away}</b> → <b>${chosenSig.selection}</b>...`;
       renderBetfairConnectorDetails();
 
       const res = await resolveBetfairMarketForSignal(chosenMatch.home, chosenMatch.away, chosenSig.selection);
       if (res.ok) {
         const livePrice = res.spec.side === 'LAY' ? res.bestLayPrice : res.bestBackPrice;
         if (livePrice && livePrice >= 1.02) {
-          betfairCustomOdds[chosenSig.id] = +Number(livePrice).toFixed(2);
-          saveUiState();
-          renderLiveAccordion();
+          updateBetfairCustomOdd(chosenSig.id, +Number(livePrice).toFixed(2), true);
         }
-        _bfConnectorStatusType = 'success';
+        const checkOdd = livePrice || betfairCustomOdds[chosenSig.id] || chosenSig.liveOdd || 1.75;
+        const gk = evaluateLiveOddGatekeeper(checkOdd, chosenSig);
+        _bfConnectorStatusType = gk.isOddValid ? 'success' : 'warning';
         _bfConnectorStatusMsg = [
-          `✅ <b>MERCATO BETFAIR COLLEGATO CON SUCCESSO!</b>`,
-          `• Evento Betfair: <b>${res.eventName}</b> (Event ID: <code>${res.eventId}</code>)`,
-          `• Mercato Trovato: <b>${res.marketName}</b> (Market ID: <code>${res.marketId}</code>)`,
-          `• Selezione Runner: <b>${res.runnerName}</b> (Selection ID: <code>${res.selectionId}</code> • Lato: <b>${res.spec.sideLabel}</b>)`,
-          livePrice ? `• Quota Reale Live letta da Betfair: <b>@${Number(livePrice).toFixed(2)}</b> (aggiornata automaticamente nel Semaforo!)` : `• Mercato trovato, clicca il pulsante giallo qui sotto per aprirlo direttamente su Betfair.it!`
-        ].join('<br/>');
-      } else if (res.corsBlocked) {
-        _bfConnectorStatusType = 'warning';
-        _bfConnectorStatusMsg = [
-          `🛡️ <b>DIAGNOSTICA BROWSER (Blocco CORS su Header Betfair):</b>`,
-          `• Le tue credenziali (<b>App Key</b> + <b>SSOID Token</b>) sono salvate correttamente sul dispositivo.`,
-          `• Quando apri la Web App da <code>github.io</code>, il browser blocca per sicurezza gli header <code>X-Application</code> diretti verso <code>api.betfair.it</code> se non passi dal <b>Micro-Bridge Locale</b> (<code>http://127.0.0.1:8787</code>).`,
-          `• <b>Come fare subito:</b> Clicca su <b>"🟡 2. Apri su Betfair.it"</b> (abbiamo già tradotto per te il mercato esatto <code>${res.spec.marketTypeCode}</code> → <b>${res.spec.marketLabelIt}</b>, selezione <b>${res.spec.runnerDisplay}</b>) oppure scarica e avvia con 1 clic <b>📥 Bridge Locale Anti-CORS (.py)</b> per abilitare la lettura/invio ordini API diretto!`
+          `✅ <b>MERCATO BETFAIR COLLEGATO!</b>`,
+          `• Evento Betfair: <b>${res.eventName}</b> • Mercato: <b>${res.marketName}</b> (ID: <code>${res.marketId}</code>)`,
+          `• Selezione Runner: <b>${res.runnerName}</b> (${res.spec.sideLabel})`,
+          livePrice
+            ? `• Quota Reale Live letta da Betfair: <b>@${Number(livePrice).toFixed(2)}</b> vs Soglia Minima <b>≥ @${gk.requiredMinOdd.toFixed(2)}</b> → ${gk.isOddValid ? `<span class="text-[var(--success)] font-bold">🟢 QUOTA VALIDA (+${gk.evalBf.netEvPct}% EV)</span>` : `<span class="text-[var(--error)] font-bold">🛑 QUOTA TROPPO BASSA (${gk.evalBf.netEvPct}% EV • NON SCOMMETTERE ORA)</span>`}`
+            : `• Inserisci o verifica nella casella <b>"📊 Quota vista su Betfair"</b> la quota attuale per il controllo automatico di valore (Min richiesto: <b>≥ @${gk.requiredMinOdd.toFixed(2)}</b>).`
         ].join('<br/>');
       } else {
         _bfConnectorStatusType = 'warning';
@@ -2821,11 +2939,20 @@
           return;
         }
         cached = res;
+      } else {
+        await refreshBetfairMarketBookOdds(cached, spec);
       }
 
       const effectiveOdd = betfairCustomOdds[chosenSig.id] || cached.bestBackPrice || chosenSig.liveOdd || chosenSig.minBetfairOdd || 1.75;
-      const evalBf = evaluateBetfairBackOdd(effectiveOdd, chosenSig.fairOdd || 1.55);
-      const stakeEuro = Math.max(2, evalBf.kelly.euro || 10);
+      const gk = evaluateLiveOddGatekeeper(effectiveOdd, chosenSig);
+      if (!gk.isOddValid) {
+        _bfConnectorStatusType = 'warning';
+        _bfConnectorStatusMsg = `🛑 <b>ORDINE BLOCCATO DAL CONTROLLO QUOTA:</b> La quota attuale su Betfair (<b>@${gk.oddVal.toFixed(2)}</b>) è inferiore alla <b>Quota Minima Richiesta (≥ @${gk.requiredMinOdd.toFixed(2)})</b> (${gk.evalBf.netEvPct}% EV). Non inviamo ordini in perdita matematica! Attendi che la quota salga ad almeno <b>@${gk.requiredMinOdd.toFixed(2)}</b>.`;
+        renderBetfairConnectorDetails();
+        return;
+      }
+
+      const stakeEuro = Math.max(2, gk.evalBf.kelly.euro || 10);
 
       const orderRes = await callBetfairExchangeApi('placeOrders', {
         marketId: cached.marketId,
@@ -2933,9 +3060,12 @@
     }
 
     /**
-     * Invia su Telegram una notifica completa di PROVA di una Partita Live + Pronostico Specifico + Link Diretto Betfair Exchange.
+     * Invia su Telegram una notifica di una Partita Live + Pronostico Specifico + Link Diretto Betfair Exchange,
+     * ma CONTROLLA PRIMA LA QUOTA BETFAIR (Gatekeeper): se la quota è inferiore alla soglia minima (es. @1.33 < @1.60),
+     * blocca l'invio del segnale "ENTRA ORA" e avvisa l'utente!
      */
-    async function sendLiveMatchTestToTelegram(targetMatchKey = null, targetSigId = null, isAutoStartup = false) {
+    async function sendLiveMatchTestToTelegram(targetMatchKey = null, targetSigId = null, isAutoStartup = false, forceEvenIfLowOdd = false) {
+      if (isAutoStartup) return { ok: false, skipped: true };
       saveBetfairLocalVault();
       const cfg = getTelegramLocalConfig();
       const st = document.getElementById('bf-vault-status');
@@ -2971,14 +3101,14 @@
       };
 
       if (!cfg.botToken || !cfg.chatId) {
-        if (!isAutoStartup) {
-          const vault = document.getElementById('betfair-vault-panel');
-          if (vault) vault.classList.remove('hidden');
-          setUiFeedback('warning', '⚠️ <b>Token Bot o Chat ID Telegram non trovati su questo browser:</b> Inseriscili nel pannello <b>"🔐 Credenziali Betfair &amp; Telegram"</b> qui sotto e premi <b>📲 Invia Prova Partita Live su Telegram</b>.');
-        }
+        const vault = document.getElementById('betfair-vault-panel');
+        if (vault) vault.classList.remove('hidden');
+        setUiFeedback('warning', '⚠️ <b>Token Bot o Chat ID Telegram non trovati su questo browser:</b> Inseriscili nel pannello <b>"🔐 Credenziali Betfair &amp; Telegram"</b> qui sotto e premi <b>📲 Invia Prova Partita Live su Telegram</b>.');
         return { ok: false, error: 'Missing Telegram credentials' };
       }
 
+      // Sincronizza eventuale quota digitata manualmente dall'utente nella casella "Quota vista su Betfair"
+      const manualOddInp = document.getElementById('bf-manual-liveodd-input');
       const pool = getConnectorMatchPool();
       const matchSel = document.getElementById('bf-conn-match-select');
       const sigSel = document.getElementById('bf-conn-sig-select');
@@ -3003,31 +3133,59 @@
         chosenSig = chosenMatch.signals.find(s => s.id === sigSel.value);
       }
       if (!chosenSig) {
-        chosenSig = chosenMatch.signals[0];
+        // Se non è stato specificato un segnale, scegli il primo segnale che rispetta la Quota Minima!
+        chosenSig = chosenMatch.signals.find(s => evaluateLiveOddGatekeeper(betfairCustomOdds[s.id] || s.liveOdd, s).isOddValid) || chosenMatch.signals[0];
       }
 
-      if (!isAutoStartup) {
-        setUiFeedback('info', `⏳ Invio notifica Telegram di prova per <b>${chosenMatch.home} vs ${chosenMatch.away}</b> → <b>${chosenSig.selection}</b>...`);
+      if (manualOddInp && (!targetSigId || (sigSel && sigSel.value === chosenSig.id))) {
+        const typedVal = parseFloat(String(manualOddInp.value).replace(',', '.'));
+        if (!isNaN(typedVal) && typedVal >= 1.01) {
+          betfairCustomOdds[chosenSig.id] = +typedVal.toFixed(2);
+        }
       }
+
+      setUiFeedback('info', `⏳ Controllo Quota Betfair in corso per <b>${chosenMatch.home} vs ${chosenMatch.away}</b> → <b>${chosenSig.selection}</b>...`);
 
       const spec = mapSelectionToBetfairSpec(chosenSig.selection, chosenMatch.home, chosenMatch.away);
       const cacheKey = `${normalizeTeamName(chosenMatch.home)}|${normalizeTeamName(chosenMatch.away)}|${spec.marketTypeCode}|${spec.side}`;
       let cached = BETFAIR_MARKET_CACHE[cacheKey] || null;
 
-      if (!cached) {
-        try {
-          const bfRes = await resolveBetfairMarketForSignal(chosenMatch.home, chosenMatch.away, chosenSig.selection, true);
-          if (bfRes && bfRes.ok) cached = bfRes;
-        } catch (_) {}
-      }
+      try {
+        const bfRes = await resolveBetfairMarketForSignal(chosenMatch.home, chosenMatch.away, chosenSig.selection, true);
+        if (bfRes && bfRes.ok) cached = bfRes;
+      } catch (_) {}
 
-      const effectiveOdd = cached?.bestBackPrice && spec.side === 'BACK'
+      const apiLiveOdd = cached?.bestBackPrice && spec.side === 'BACK'
         ? cached.bestBackPrice
         : cached?.bestLayPrice && spec.side === 'LAY'
           ? cached.bestLayPrice
-          : (betfairCustomOdds[chosenSig.id] || chosenSig.liveOdd || chosenSig.minBetfairOdd || 1.82);
-      const evalBf = evaluateBetfairBackOdd(effectiveOdd, chosenSig.fairOdd || 1.56);
-      const stakeEuro = Math.max(15, evalBf.kelly.euro || 25);
+          : null;
+
+      if (apiLiveOdd && apiLiveOdd >= 1.01) {
+        betfairCustomOdds[chosenSig.id] = +Number(apiLiveOdd).toFixed(2);
+      }
+
+      const effectiveOdd = betfairCustomOdds[chosenSig.id]
+        || apiLiveOdd
+        || chosenSig.liveOdd
+        || chosenSig.minBetfairOdd
+        || 1.75;
+
+      const gk = evaluateLiveOddGatekeeper(effectiveOdd, chosenSig);
+      const evalBf = gk.evalBf;
+
+      // GATEKEEPER RIGOROSO SULLA QUOTA: Se su Betfair la quota è es. @1.33 (< @1.60 / < minBetfairOdd), BLOCCA la notifica di ingresso!
+      if (!gk.isOddValid && !forceEvenIfLowOdd) {
+        setUiFeedback(
+          'warning',
+          `🛑 <b>NOTIFICA BLOCCATA DAL CONTROLLO QUOTA BETFAIR:</b> Per <b>${chosenMatch.home} - ${chosenMatch.away}</b> (<b>${chosenSig.selection}</b>) la quota attuale su Betfair è <b>@${gk.oddVal.toFixed(2)}</b>, inferiore alla <b>Quota Minima Richiesta ≥ @${gk.requiredMinOdd.toFixed(2)}</b> (EV Netto: <b>${evalBf.netEvPct}%</b>).<br/>` +
+          `💡 <i>Il sistema non invia segnali "ENTRA ORA" quando la quota su Betfair è schiacciata (es. @1.33). Attendi che la quota salga ad almeno <b>@${gk.requiredMinOdd.toFixed(2)}</b>!</i> ` +
+          `<button onclick="sendLiveMatchTestToTelegram('${chosenMatch.key}', '${chosenSig.id}', false, true)" class="ml-2 px-2 py-0.5 rounded bg-[var(--secondary)] border border-[var(--border)] text-[var(--foreground)] font-bold hover:border-[var(--warning)]">Invia comunque avviso Quota Bassa su Telegram</button>`
+        );
+        return { ok: false, blockedByOdd: true, odd: gk.oddVal, requiredMinOdd: gk.requiredMinOdd };
+      }
+
+      const stakeEuro = gk.isOddValid ? Math.max(15, evalBf.kelly.euro || 25) : 0;
 
       const finalMktId = cached?.marketId || getSavedDefaultBetfairMarketId();
       const directApexUrl = `https://salvo061978.github.io/apex-edge-betting/#live=${encodeURIComponent(chosenMatch.matchId)}&sig=${encodeURIComponent(chosenSig.id)}`;
@@ -3043,21 +3201,29 @@
         : (chosenMatch.sotText || '5 - 3');
       const semDisplay = liveObj?.semaphore?.score || chosenMatch.semScore || 84;
 
+      const headerLine = gk.isOddValid
+        ? `🟢🔥 <b>APEX EDGE • SEGNALE PARTITA LIVE (QUOTA VERIFICATA ≥ @${gk.requiredMinOdd.toFixed(2)})</b>`
+        : `🛑⏳ <b>APEX EDGE • AVVISO QUOTA BASSA SU BETFAIR (@${gk.oddVal.toFixed(2)} &lt; @${gk.requiredMinOdd.toFixed(2)} • NON ENTRARE ORA)</b>`;
+
+      const oddStatusLine = gk.isOddValid
+        ? `✅ Quota Betfair Verificata: <b>@${gk.oddVal.toFixed(2)}</b> (Min richiesta: <b>≥ @${gk.requiredMinOdd.toFixed(2)}</b> • Fair: <b>@${gk.fairVal.toFixed(2)}</b> • <b>+${evalBf.netEvPct}% EV Netto</b>)`
+        : `🛑 Quota Betfair Attuale: <b>@${gk.oddVal.toFixed(2)}</b> — <b>SOTTO SOGLIA MINIMA!</b> (Attendi che salga ad almeno <b>≥ @${gk.requiredMinOdd.toFixed(2)}</b> • Fair: <b>@${gk.fairVal.toFixed(2)}</b>)`;
+
       const msg = [
-        `🟢🔥 <b>APEX EDGE • SEGNALE PARTITA LIVE (TEST OPERATIVO)</b>`,
+        headerLine,
         ``,
         `⚽ <b>${displayMatchTitle}</b>`,
         `🏆 ${chosenMatch.league}`,
         `⏱️ Minuto &amp; Score: <b>${chosenMatch.minute}</b> • Risultato: <b>${chosenMatch.score}</b>`,
-        `📊 Semaforo Live: <b>${semDisplay}/100 (🟢🔥 ENTRA ORA)</b>`,
+        `📊 Semaforo Live: <b>${semDisplay}/100 (${gk.isOddValid ? '🟢🔥 ENTRA ORA' : `🛑⏳ ATTENDI QUOTA ≥ @${gk.requiredMinOdd.toFixed(2)}`})</b>`,
         `📈 Telemetria Live: xG <b>${xgDisplay}</b> • Tiri in Porta <b>${sotDisplay}</b>`,
         ``,
         `🎯 Pronostico: <b>${chosenSig.selection}</b>`,
         `🧠 Strategia: <code>${chosenSig.signalType}</code>`,
         `🟡 Mercato Betfair: <code>${spec.marketTypeCode}</code> → <b>${cached?.marketName || spec.marketLabelIt}</b>`,
         `📌 Lato &amp; Runner Betfair: <b>${spec.sideLabel}</b> su <b>${cached?.runnerName || spec.runnerDisplay}</b> (Market ID: <code>${finalMktId}</code>)`,
-        `💎 Quota Fair: <b>@${Number(chosenSig.fairOdd || 1.56).toFixed(2)}</b> • Target Betfair: <b>≥ @${Number(effectiveOdd).toFixed(2)}</b> (+${evalBf.netEvPct}% EV Netto)`,
-        `💶 Stake Kelly Consigliato: <b>€${stakeEuro}</b>`,
+        oddStatusLine,
+        `💶 Stake Kelly Consigliato: <b>${gk.isOddValid ? `€${stakeEuro}` : '€0 (NO-BET finché la quota non sale)'}</b>`,
         ``,
         `━━━━━━━━━━━━━━━━━━━━`,
         `🟡 <b>1) SCOMMETTI ORA SU BETFAIR EXCHANGE:</b>`,
@@ -3075,7 +3241,7 @@
 
       const r = await sendTelegramMessage(msg, cfg, inlineBtns);
       if (r.ok) {
-        setUiFeedback('success', `✅ <b>Notifica Partita Live inviata su Telegram!</b> (${displayMatchTitle} → <b>${chosenSig.selection}</b> • Link Diretto: <code>${directBetfairUrl}</code>). Controlla subito la tua chat Telegram!`);
+        setUiFeedback('success', `✅ <b>Notifica Partita Live inviata su Telegram!</b> (Quota verificata: <b>@${gk.oddVal.toFixed(2)}</b> vs Min <b>≥ @${gk.requiredMinOdd.toFixed(2)}</b> • Link Diretto: <code>${directBetfairUrl}</code>).`);
       } else {
         setUiFeedback('error', `❌ <b>Errore invio Telegram:</b> ${r.error}`);
       }
@@ -3083,7 +3249,7 @@
     }
 
     async function testTelegramNotification() {
-      return sendLiveMatchTestToTelegram(null, null, false);
+      return sendLiveMatchTestToTelegram(null, null, false, false);
     }
 
     async function sendTelegramLiveEntryAlert(snap, m) {
@@ -3094,17 +3260,45 @@
       const matchId = m?.id || String(snap.id || '').replace(/^snap-/, '');
       const apexLiveUrl = `https://salvo061978.github.io/apex-edge-betting/#live=${encodeURIComponent(matchId)}`;
 
-      // Risolve il Market ID specifico (formato https://www.betfair.it/exchange/plus/football/market/1.xxxxxx)
+      // Risolve il Market ID specifico E controlla la quota reale via listMarketBook prima di inviare!
       let resolvedMktId = getSavedDefaultBetfairMarketId();
+      let apiPrice = null;
       const bfSpec = mapSelectionToBetfairSpec(snap.selection, m?.home || '', m?.away || '');
       if (m?.home && m?.away) {
         try {
           const bfRes = await resolveBetfairMarketForSignal(m.home, m.away, snap.selection);
-          if (bfRes && bfRes.ok && bfRes.marketId) {
-            resolvedMktId = bfRes.marketId;
+          if (bfRes && bfRes.ok) {
+            if (bfRes.marketId) resolvedMktId = bfRes.marketId;
+            apiPrice = bfSpec.side === 'LAY' ? bfRes.bestLayPrice : bfRes.bestBackPrice;
           }
         } catch (_) {}
       }
+
+      const topSig = (m?.liveSignals || []).find(s => s.selection === snap.selection) || (m?.liveSignals || [])[0];
+      const currentBfOdd = Number(
+        apiPrice
+        || (topSig && betfairCustomOdds[topSig.id])
+        || snap.matchedBetfairOdd
+        || topSig?.liveOdd
+        || 0
+      );
+      const gk = evaluateLiveOddGatekeeper(currentBfOdd, {
+        fairOdd: snap.fairOddAtTrigger || topSig?.fairOdd || 1.56,
+        minBetfairOdd: snap.minBetfairOdd || topSig?.minBetfairOdd || 1.64,
+        minOperationalOdd: topSig?.minOperationalOdd || 1.60
+      });
+
+      // BLOCCO RIGOROSO: Se su Betfair la quota attuale è sotto la soglia minima (es. @1.33 < @1.60), NON inviare la notifica!
+      if (!gk.isOddValid) {
+        snap._tgSending = false;
+        snap.triggerStatus = 'BLOCKED_NO_BET';
+        snap.matchedBetfairOdd = gk.oddVal;
+        snap.resolutionNote = `🛑 Notifica Telegram bloccata: quota su Betfair (@${gk.oddVal.toFixed(2)}) inferiore alla soglia minima richiesta (≥ @${gk.requiredMinOdd.toFixed(2)}).`;
+        saveUiState();
+        return false;
+      }
+
+      snap.matchedBetfairOdd = gk.oddVal;
       const betfairUrl = buildBetfairMarketUrl(resolvedMktId);
 
       const msg = [
@@ -3113,7 +3307,7 @@
         `⏱️ Minuto: <b>${snap.triggerMinute}</b> • Risultato: <b>${snap.scoreAtTrigger}</b>`,
         '',
         `🎯 Mercato: <b>${snap.selection}</b> (<code>${bfSpec.marketTypeCode}</code> • ${bfSpec.sideLabel} • ID: <code>${resolvedMktId}</code>)`,
-        `📊 Quota Fair: <b>@${Number(snap.fairOddAtTrigger).toFixed(2)}</b> • Min Betfair: <b>@${Number(snap.minBetfairOdd).toFixed(2)}</b>`,
+        `✅ Quota Betfair Verificata: <b>@${gk.oddVal.toFixed(2)}</b> (Min richiesta: <b>≥ @${gk.requiredMinOdd.toFixed(2)}</b> • Fair: <b>@${gk.fairVal.toFixed(2)}</b> • <b>+${gk.evalBf.netEvPct}% EV</b>)`,
         `📈 Telemetria: ${snap.statsAtTrigger}`,
         `🔗 Pre-Match: ${snap.preMatchConvergence}`,
         '',
@@ -4689,13 +4883,18 @@
      */
     function recordLiveSignalSnapshot(m, topSig, sem, preMatchInfo) {
       if (!topSig || sem.status !== 'ENTER_NOW') return;
+      const effectiveOdd = betfairCustomOdds[topSig.id] || topSig.liveOdd || 0;
+      const gk = evaluateLiveOddGatekeeper(effectiveOdd, topSig);
+      // BLOCCO RIGOROSO QUOTA: Se su Betfair la quota è sotto la soglia minima (es. @1.33 < @1.60), NON congelare il segnale e NON inviare notifica!
+      if (!gk.isOddValid) return;
+
       const snapId = `live-auto-${m.id}`;
       const existing = LIVE_SIGNALS_HISTORY.find(item => item.id === snapId);
       if (existing) {
         if (existing.outcome === 'PENDING' && !existing.telegramNotified) {
           sendTelegramLiveEntryAlert(existing, m);
         }
-        return; // Già congelato al primo trigger verde!
+        return; // Già congelato al primo trigger verde con quota valida!
       }
 
       const s = m.liveStats;
@@ -4714,10 +4913,10 @@
         preMatchConvergence: preMatchInfo.label,
         selection: topSig.selection,
         fairOddAtTrigger: topSig.fairOdd,
-        minBetfairOdd: topSig.minBetfairOdd,
-        matchedBetfairOdd: betfairCustomOdds[topSig.id] || topSig.liveOdd || topSig.minBetfairOdd,
+        minBetfairOdd: gk.requiredMinOdd,
+        matchedBetfairOdd: gk.oddVal,
         finalScore: 'IN CORSO',
-        resolutionNote: `⏳ Segnale congelato al ${m.minute}' sul punteggio di ${m.scoreHome}-${m.scoreAway}. Verifica automatica al 90' (FT).`,
+        resolutionNote: `⏳ Segnale congelato al ${m.minute}' sul punteggio di ${m.scoreHome}-${m.scoreAway} con quota Betfair verificata @${gk.oddVal.toFixed(2)} (≥ @${gk.requiredMinOdd.toFixed(2)}). Verifica automatica al 90' (FT).`,
         outcome: 'PENDING',
         telegramNotified: false
       };
@@ -4865,33 +5064,43 @@
       const probNextGoal = Math.min(0.78, Math.max(0.18, 1 - Math.exp(-lambdaRemTotal)));
       const fairOddOver = +(1 / probNextGoal).toFixed(2);
       const minBetfairOver = calcMinBetfairBackOdd(fairOddOver, 0.05);
-      const defaultBetfairOver = m.feedLiveOddOver || Math.max(minBetfairOver, LIVE_MIN_OPERATIONAL_ODD);
 
-      if (minBetfairOver < LIVE_MIN_OPERATIONAL_ODD && semaphore.status === 'ENTER_NOW') {
-        semaphore.status = 'PREPARE';
-        semaphore.badgeText = `🟡⏳ ATTENDI QUOTA ≥ @${LIVE_MIN_OPERATIONAL_ODD.toFixed(2)} (Score ${semaphore.score}/100)`;
-        semaphore.badgeClass = 'bg-[var(--warning)]/20 text-[var(--warning)] border-[var(--warning)]';
-        semaphore.actionAdvice = `Telemetria forte (${semaphore.score}/100), ma la quota attuale (@${minBetfairOver.toFixed(2)}) è sotto la soglia minima dinamica (@${LIVE_MIN_OPERATIONAL_ODD.toFixed(2)}). Attendi che la quota salga su Betfair prima di entrare.`;
-      }
+      // Stima realistica della quota attuale sul book di Betfair Exchange in funzione del minuto (Time-Decay reale):
+      // Es. al 54' la quota Betfair per Over (G+0.5) è ~@1.33, al 62' è ~@1.51, al 67'+ supera @1.62!
+      const basePreGoals = preMatchInfo.matched ? Math.max(2.40, preMatchInfo.projTotalXg || 2.80) : 2.80;
+      const remShare90 = Math.pow(Math.max(3, 94 - min) / 94, 0.90);
+      const livePaceAdj = Math.min(1.10, Math.max(0.88, 0.86 + ((s.xgHome + s.xgAway) / Math.max(15, min)) * 8.5));
+      const lambdaMktRem = basePreGoals * remShare90 * livePaceAdj;
+      const probMktOver = Math.min(0.88, Math.max(0.14, 1 - Math.exp(-lambdaMktRem)));
+      const realisticMktOddOver = +(Math.max(1.08, (1 / probMktOver) * 0.985)).toFixed(2);
 
-      const signals = [];
       const overLine = (totalGoals + 0.5).toFixed(1);
       const sigOverId = `sig-over-${m.id}`;
+      const overSelectionText = `Over ${overLine} Gol (Almeno 1 Gol dal ${min}' a fine gara)`;
+      const overSpec = mapSelectionToBetfairSpec(overSelectionText, m.home, m.away);
+      const overCacheKey = `${normalizeTeamName(m.home)}|${normalizeTeamName(m.away)}|${overSpec.marketTypeCode}|${overSpec.side}`;
+      const cachedOverBf = BETFAIR_MARKET_CACHE[overCacheKey]?.bestBackPrice || null;
+
+      // MAI forzare la quota live con Math.max(minBetfairOver, LIVE_MIN_OPERATIONAL_ODD)! Usa la quota reale (API / manuale / curva Betfair):
+      const actualLiveOddOver = betfairCustomOdds[sigOverId] || cachedOverBf || m.feedLiveOddOver || realisticMktOddOver;
+      const reqMinOver = +(Math.max(minBetfairOver, LIVE_MIN_OPERATIONAL_ODD)).toFixed(2);
+
+      const signals = [];
       signals.push({
         id: sigOverId,
         signalType: `POISSON IN-PLAY • OVER ${overLine} GOL`,
-        selection: `Over ${overLine} Gol (Almeno 1 Gol dal ${min}' a fine gara)`,
+        selection: overSelectionText,
         market: `Somma Gol Live (Attuale: ${m.scoreHome}-${m.scoreAway})`,
         fairOdd: fairOddOver,
         minBetfairOdd: minBetfairOver,
         minOperationalOdd: LIVE_MIN_OPERATIONAL_ODD,
-        liveOdd: betfairCustomOdds[sigOverId] || defaultBetfairOver,
+        liveOdd: actualLiveOddOver,
         confidence: Math.min(9.8, +(6.8 + lambdaRemTotal * 2.1).toFixed(1)),
-        triggerReason: `λ Residuo = ${lambdaRemTotal.toFixed(2)} gol attesi nei ${remMins}' finali • Deficit xG ${semaphore.xgDeficit >= 0 ? '+' : ''}${semaphore.xgDeficit} • Soglia Dinamica ≥ @${LIVE_MIN_OPERATIONAL_ODD.toFixed(2)}.`,
-        urgency: semaphore.status === 'ENTER_NOW'
+        triggerReason: `λ Residuo = ${lambdaRemTotal.toFixed(2)} gol attesi nei ${remMins}' finali • Quota Betfair stimata/letta @${actualLiveOddOver.toFixed(2)} vs Soglia Minima ≥ @${reqMinOver.toFixed(2)}.`,
+        urgency: (semaphore.status === 'ENTER_NOW' && actualLiveOddOver >= reqMinOver)
           ? '🟢🔥 ENTRA ORA SU BETFAIR'
-          : minBetfairOver < LIVE_MIN_OPERATIONAL_ODD
-            ? `🟡 ATTENDI QUOTA ≥ @${LIVE_MIN_OPERATIONAL_ODD.toFixed(2)}`
+          : actualLiveOddOver < reqMinOver
+            ? `🛑 QUOTA @${actualLiveOddOver.toFixed(2)} BASSA (ATTENDI ≥ @${reqMinOver.toFixed(2)})`
             : semaphore.status === 'PREPARE'
               ? '🟡 PREPARA MERCATO'
               : '⚪ ATTENDI (NO-BET)'
@@ -4908,8 +5117,13 @@
         const prob1H = Math.min(0.72, Math.max(0.28, 1 - Math.exp(-lambda1H)));
         const fair1H = +(1 / prob1H).toFixed(2);
         const minBf1H = calcMinBetfairBackOdd(fair1H, 0.05);
+        const lambdaMkt1H = 1.25 * Math.pow(rem1H / 46, 0.88) * livePaceAdj;
+        const probMkt1H = Math.min(0.80, Math.max(0.20, 1 - Math.exp(-lambdaMkt1H)));
+        const realisticMktOdd1H = +(Math.max(1.22, (1 / probMkt1H) * 0.985)).toFixed(2);
         const sig1HId = `sig-1h-${m.id}`;
-        signals.push({
+        const actualLiveOdd1H = betfairCustomOdds[sig1HId] || realisticMktOdd1H;
+        const reqMin1H = +(Math.max(minBf1H, LIVE_MIN_OPERATIONAL_ODD)).toFixed(2);
+        const sig1HObj = {
           id: sig1HId,
           signalType: `STRATEGIA 1° TEMPO • OVER 0.5 1°T`,
           selection: `Over 0.5 Gol 1° Tempo (Gol entro il 45')`,
@@ -4917,11 +5131,15 @@
           fairOdd: fair1H,
           minBetfairOdd: minBf1H,
           minOperationalOdd: LIVE_MIN_OPERATIONAL_ODD,
-          liveOdd: betfairCustomOdds[sig1HId] || Math.max(minBf1H, LIVE_MIN_OPERATIONAL_ODD),
+          liveOdd: actualLiveOdd1H,
           confidence: 8.6,
-          triggerReason: `0-0 al ${min}' con ${totalXgNow.toFixed(2)} xG e ${totalSotNow} tiri in porta: finestra ideale per gol prima dell'intervallo.`,
-          urgency: minBf1H >= LIVE_MIN_OPERATIONAL_ODD && semaphore.score >= 60 ? '🟢🔥 FINESTRA 1°T ATTIVA' : '🟡 MONITORA 1°T'
-        });
+          triggerReason: `0-0 al ${min}' con ${totalXgNow.toFixed(2)} xG e ${totalSotNow} tiri in porta: Quota Betfair 1°T @${actualLiveOdd1H.toFixed(2)} vs Min ≥ @${reqMin1H.toFixed(2)}.`,
+          urgency: actualLiveOdd1H >= reqMin1H && semaphore.score >= 60
+            ? '🟢🔥 FINESTRA 1°T ATTIVA'
+            : `🛑 QUOTA 1°T @${actualLiveOdd1H.toFixed(2)} (ATTENDI ≥ @${reqMin1H.toFixed(2)})`
+        };
+        // Nel 1° tempo sullo 0-0, Over 0.5 1°T ha quota reale giocabile (@1.65-@2.10), mentre Over 0.5 FT è @1.15: promuovilo in cima!
+        signals.unshift(sig1HObj);
       }
 
       const homeShare = (s.xgHome + s.appmHome * 0.5) / Math.max(0.2, (s.xgHome + s.xgAway + (s.appmHome + s.appmAway) * 0.5));
@@ -4932,6 +5150,9 @@
         const fairTeamNext = +(1 / probTeamNext).toFixed(2);
         const minBetfairTeam = calcMinBetfairBackOdd(fairTeamNext, 0.05);
         const sigNextId = `sig-next-${m.id}`;
+        const realisticMktOddTeam = +(Math.max(1.25, realisticMktOddOver * (1 / Math.max(0.52, domShare * 0.92)))).toFixed(2);
+        const actualLiveOddTeam = betfairCustomOdds[sigNextId] || realisticMktOddTeam;
+        const reqMinTeam = +(Math.max(minBetfairTeam, LIVE_MIN_OPERATIONAL_ODD)).toFixed(2);
 
         signals.push({
           id: sigNextId,
@@ -4941,10 +5162,12 @@
           fairOdd: fairTeamNext,
           minBetfairOdd: minBetfairTeam,
           minOperationalOdd: LIVE_MIN_OPERATIONAL_ODD,
-          liveOdd: betfairCustomOdds[sigNextId] || Math.max(minBetfairTeam, LIVE_MIN_OPERATIONAL_ODD),
+          liveOdd: actualLiveOddTeam,
           confidence: 9.0,
           triggerReason: `${domTeam} genera il ${Math.round(domShare * 100)}% della pressione offensiva live (xG ${s.xgHome.toFixed(2)}-${s.xgAway.toFixed(2)}, Tiri in Porta ${s.shotsOnTargetHome}-${s.shotsOnTargetAway}).`,
-          urgency: semaphore.status === 'ENTER_NOW' && minBetfairTeam >= LIVE_MIN_OPERATIONAL_ODD ? '🟢🔥 ASSEDIO ATTIVO' : '🟡 MONITORA DOMINIO'
+          urgency: semaphore.status === 'ENTER_NOW' && actualLiveOddTeam >= reqMinTeam
+            ? '🟢🔥 ASSEDIO ATTIVO'
+            : `🟡 QUOTA @${actualLiveOddTeam.toFixed(2)} (MIN ≥ @${reqMinTeam.toFixed(2)})`
         });
 
         // Strategia 3: LAY THE DRAW (Banca il Pareggio) con Cash-Out al gol
@@ -4953,6 +5176,9 @@
           const fairLtd = +(1 / probBreakDraw).toFixed(2);
           const minBfLtd = calcMinBetfairBackOdd(fairLtd, 0.05);
           const sigLtdId = `sig-ltd-${m.id}`;
+          const realisticMktOddLtd = +(Math.max(1.30, realisticMktOddOver * 1.15)).toFixed(2);
+          const actualLiveOddLtd = betfairCustomOdds[sigLtdId] || realisticMktOddLtd;
+          const reqMinLtd = +(Math.max(minBfLtd, LIVE_MIN_OPERATIONAL_ODD)).toFixed(2);
           signals.push({
             id: sigLtdId,
             signalType: `EXCHANGE • LAY THE DRAW (BANCA X)`,
@@ -4961,10 +5187,10 @@
             fairOdd: fairLtd,
             minBetfairOdd: minBfLtd,
             minOperationalOdd: LIVE_MIN_OPERATIONAL_ODD,
-            liveOdd: betfairCustomOdds[sigLtdId] || Math.max(minBfLtd, LIVE_MIN_OPERATIONAL_ODD),
+            liveOdd: actualLiveOddLtd,
             confidence: 8.8,
             triggerReason: `Parità al ${min}' ma ${domTeam} domina al ${Math.round(domShare * 100)}%: al primo gol fai green-up immediato su Betfair.`,
-            urgency: minBfLtd >= LIVE_MIN_OPERATIONAL_ODD && semaphore.score >= 65 ? '🟢⚡ LTD CONSIGLIATO' : '🟡 PREPARA LTD'
+            urgency: actualLiveOddLtd >= reqMinLtd && semaphore.score >= 65 ? '🟢⚡ LTD CONSIGLIATO' : '🟡 PREPARA LTD'
           });
         }
       }
@@ -4992,10 +5218,24 @@
         }
       }
 
+      // GATEKEEPER SEMAFORO SULLA QUOTA REALE BETFAIR DEL SEGNALE PRINCIPALE:
+      // Se la quota attuale su Betfair (es. @1.33 al 54') è inferiore alla Quota Minima Richiesta (es. >= @1.60),
+      // il Semaforo NON può essere VERDE (ENTRA ORA) e la notifica Telegram viene bloccata!
+      const primarySig = signals[0];
+      if (primarySig) {
+        const gkPrimary = evaluateLiveOddGatekeeper(primarySig.liveOdd, primarySig);
+        if (!gkPrimary.isOddValid && semaphore.status === 'ENTER_NOW') {
+          semaphore.status = 'PREPARE';
+          semaphore.badgeText = `🛑⏳ QUOTA BETFAIR BASSA (@${gkPrimary.oddVal.toFixed(2)} < @${gkPrimary.requiredMinOdd.toFixed(2)}): ATTENDI`;
+          semaphore.badgeClass = 'bg-[var(--warning)]/20 text-[var(--warning)] border-[var(--warning)]';
+          semaphore.actionAdvice = `🛑 BLOCCO QUOTA ATTIVO: La telemetria è da ingresso (${semaphore.score}/100), ma su Betfair la quota attuale per "${primarySig.selection}" è @${gkPrimary.oddVal.toFixed(2)}, inferiore alla Quota Minima Richiesta (≥ @${gkPrimary.requiredMinOdd.toFixed(2)}, EV ${gkPrimary.evalBf.netEvPct}%). NON entrare a @${gkPrimary.oddVal.toFixed(2)}: attendi che la quota salga su Betfair ad almeno @${gkPrimary.requiredMinOdd.toFixed(2)}!`;
+        }
+      }
+
       m.liveSignals = signals;
-      // Se il semaforo è verde (ENTRA ORA con quota >= soglia dinamica 1.50/1.60), congela automaticamente il segnale nello Storico Live!
-      if (!m._isPreviewOnly) {
-        recordLiveSignalSnapshot(m, signals[0], semaphore, preMatchInfo);
+      // Solo se il Semaforo è rimasto VERDE (ENTRA ORA) E la quota su Betfair supera il Gatekeeper (>= 1.50/1.60 e >= minBetfairOdd), congela e invia su Telegram!
+      if (!m._isPreviewOnly && primarySig) {
+        recordLiveSignalSnapshot(m, primarySig, semaphore, preMatchInfo);
       }
       return signals;
     }
@@ -5013,8 +5253,11 @@
       if (isNaN(nextVal) || nextVal < 1.02) nextVal = 1.02;
       if (nextVal > 50) nextVal = 50;
       betfairCustomOdds[sigId] = +nextVal.toFixed(2);
+      LIVE_MATCHES.forEach(m => computeDynamicLiveSignals(m));
       saveUiState();
+      updateLiveHeaderCounts();
       renderLiveAccordion();
+      renderBetfairConnectorDetails();
     }
 
     function toggleLiveAutoRefresh() {
@@ -6287,13 +6530,6 @@
         if (initialHash) {
           openBetfairLiveConnectorPanel(initialHash.liveId, initialHash.sigId, true);
         }
-        try {
-          const tgCfg = getTelegramLocalConfig();
-          if (tgCfg.botToken && tgCfg.chatId && !localStorage.getItem('apex_live_tg_test_sent_v6')) {
-            localStorage.setItem('apex_live_tg_test_sent_v6', '1');
-            sendLiveMatchTestToTelegram(null, null, true);
-          }
-        } catch (_) {}
       });
 
       const info = getDynamicDateInfo();

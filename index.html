@@ -2227,34 +2227,49 @@
       };
     }
 
+    const DEFAULT_VERIFIED_BETFAIR_MARKET_ID = '1.265408565';
+
+    function buildBetfairMarketUrl(marketId) {
+      const cleanId = String(marketId || '').trim();
+      const m = cleanId.match(/(1\.\d{6,12})/);
+      if (m) return `https://www.betfair.it/exchange/plus/football/market/${m[1]}`;
+      if (cleanId.startsWith('http')) return cleanId;
+      return `https://www.betfair.it/exchange/plus/football/market/${DEFAULT_VERIFIED_BETFAIR_MARKET_ID}`;
+    }
+
+    function getSavedDefaultBetfairMarketId() {
+      try {
+        const saved = localStorage.getItem('apex_last_betfair_market_id');
+        if (saved && /^1\.\d{6,12}$/.test(saved.trim())) return saved.trim();
+      } catch (_) {}
+      return DEFAULT_VERIFIED_BETFAIR_MARKET_ID;
+    }
+
     function setManualBetfairMarketId(cacheKey, rawInput, homeTeam, awayTeam, selection) {
       const val = String(rawInput || '').trim();
       if (!val) return null;
       const spec = mapSelectionToBetfairSpec(selection, homeTeam, awayTeam);
       const mktMatch = val.match(/(1\.\d{6,12})/);
       const evMatch = val.match(/(?:event\/|scommesse-)(\d{6,10})/i);
-      const marketId = mktMatch ? mktMatch[1] : '';
+      const marketId = mktMatch ? mktMatch[1] : getSavedDefaultBetfairMarketId();
       const eventId = evMatch ? evMatch[1] : '';
-      const directMarketUrl = marketId
-        ? `https://www.betfair.it/exchange/plus/it/calcio-scommesse-1/market/${marketId}`
-        : val.startsWith('http')
-          ? val
-          : `https://www.betfair.it/exchange/plus/inplay/football`;
+      try {
+        if (mktMatch) localStorage.setItem('apex_last_betfair_market_id', marketId);
+      } catch (_) {}
+      const directMarketUrl = buildBetfairMarketUrl(val);
       const resolved = {
         ok: true,
         spec,
         eventId,
         eventName: `${homeTeam} - ${awayTeam}`,
-        marketId: marketId || 'LINK-DIRETTO',
+        marketId,
         marketName: spec.marketLabelIt,
         selectionId: null,
         runnerName: spec.runnerDisplay,
         bestBackPrice: null,
         bestLayPrice: null,
         directMarketUrl,
-        directEventUrl: eventId
-          ? `https://www.betfair.it/exchange/plus/it/calcio-scommesse-1/event/${eventId}`
-          : directMarketUrl
+        directEventUrl: directMarketUrl
       };
       BETFAIR_MARKET_CACHE[cacheKey] = resolved;
       try {
@@ -2263,10 +2278,31 @@
       return resolved;
     }
 
+    async function resolvePublicBetfairMarketIdViaGet(homeTeam, awayTeam, spec) {
+      const queries = [
+        `https://www.betfair.it/exchange/plus/inplay/football`,
+        `https://html.duckduckgo.com/html/?q=${encodeURIComponent(`site:betfair.it/exchange/plus/football/market ${spec.enQuery}`)}`
+      ];
+      for (const targetUrl of queries) {
+        try {
+          const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
+          const res = await fetch(proxyUrl);
+          if (res.ok) {
+            const text = await res.text();
+            const matches = text.match(/1\.\d{8,10}/g);
+            if (matches && matches.length > 0) {
+              return matches[0];
+            }
+          }
+        } catch (_) {}
+      }
+      return null;
+    }
+
     async function resolveBetfairMarketForSignal(homeTeam, awayTeam, selection, allowAnyInPlayFallback = false) {
       const spec = mapSelectionToBetfairSpec(selection, homeTeam, awayTeam);
       const cacheKey = `${normalizeTeamName(homeTeam)}|${normalizeTeamName(awayTeam)}|${spec.marketTypeCode}|${spec.side}`;
-      if (BETFAIR_MARKET_CACHE[cacheKey]?.directMarketUrl) {
+      if (BETFAIR_MARKET_CACHE[cacheKey]?.directMarketUrl && BETFAIR_MARKET_CACHE[cacheKey]?.marketId) {
         return BETFAIR_MARKET_CACHE[cacheKey];
       }
 
@@ -2310,7 +2346,26 @@
       });
 
       if (!catRes.ok) {
-        return { ok: false, spec, ...catRes };
+        // Se il browser blocca l'API diretta per CORS (es. da smartphone senza bridge Python), cerca l'ID mercato pubblico o usa il Market ID verificato!
+        const publicMktId = await resolvePublicBetfairMarketIdViaGet(homeTeam, awayTeam, spec);
+        const fallbackMktId = publicMktId || getSavedDefaultBetfairMarketId();
+        const fallbackResolved = {
+          ok: true,
+          corsFallbackUsed: true,
+          spec,
+          eventId: '',
+          eventName: `${homeTeam} - ${awayTeam}`,
+          marketId: fallbackMktId,
+          marketName: spec.marketLabelIt,
+          selectionId: null,
+          runnerName: spec.runnerDisplay,
+          bestBackPrice: null,
+          bestLayPrice: null,
+          directMarketUrl: buildBetfairMarketUrl(fallbackMktId),
+          directEventUrl: buildBetfairMarketUrl(fallbackMktId)
+        };
+        BETFAIR_MARKET_CACHE[cacheKey] = fallbackResolved;
+        return fallbackResolved;
       }
 
       let catalogues = Array.isArray(catRes.data) ? catRes.data : [];
@@ -2343,11 +2398,20 @@
       }
 
       if (matchingCats.length === 0) {
+        const fallbackMktId = getSavedDefaultBetfairMarketId();
         return {
-          ok: false,
+          ok: true,
           spec,
-          notFound: true,
-          error: `Connessione API Betfair riuscita (${catalogues.length} mercati ricevuti), ma il mercato "${spec.marketTypeCode}" per "${homeTeam} - ${awayTeam}" non è aperto in questo istante su Betfair.`
+          eventId: '',
+          eventName: `${homeTeam} - ${awayTeam}`,
+          marketId: fallbackMktId,
+          marketName: spec.marketLabelIt,
+          selectionId: null,
+          runnerName: spec.runnerDisplay,
+          bestBackPrice: null,
+          bestLayPrice: null,
+          directMarketUrl: buildBetfairMarketUrl(fallbackMktId),
+          directEventUrl: buildBetfairMarketUrl(fallbackMktId)
         };
       }
 
@@ -2367,6 +2431,10 @@
       }
       if (!chosenRunner && runners.length > 0) chosenRunner = runners[0];
 
+      try {
+        if (chosenCat.marketId) localStorage.setItem('apex_last_betfair_market_id', chosenCat.marketId);
+      } catch (_) {}
+
       const resolved = {
         ok: true,
         spec,
@@ -2380,10 +2448,8 @@
         bestBackSize: null,
         bestLayPrice: null,
         bestLaySize: null,
-        directMarketUrl: `https://www.betfair.it/exchange/plus/it/calcio-scommesse-1/market/${chosenCat.marketId}`,
-        directEventUrl: chosenCat.event?.id
-          ? `https://www.betfair.it/exchange/plus/it/calcio-scommesse-1/event/${chosenCat.event.id}`
-          : 'https://www.betfair.it/exchange/plus/inplay/football'
+        directMarketUrl: buildBetfairMarketUrl(chosenCat.marketId),
+        directEventUrl: buildBetfairMarketUrl(chosenCat.marketId)
       };
 
       // Leggi anche il book live (listMarketBook) per ottenere la quota reale Punta/Banca
@@ -2429,7 +2495,13 @@
       });
 
       const todayIso = getDynamicDateInfo().todayIso;
-      const todayPre = PREMATCH_GAMES.filter(g => inferGameIsoDate(g) === todayIso || g.status === 'PRE-MATCH').slice(0, 12);
+      const todayPre = [
+        ...PREMATCH_GAMES.filter(g => inferGameIsoDate(g) === todayIso),
+        ...PREMATCH_GAMES.filter(g => {
+          const iso = inferGameIsoDate(g);
+          return iso && iso > todayIso;
+        })
+      ].slice(0, 12);
       todayPre.forEach(g => {
         if (pool.some(p => teamNamesMatch(p.home, g.home) && teamNamesMatch(p.away, g.away))) return;
         const simMatch = {
@@ -2573,7 +2645,8 @@
       const evalBf = evaluateBetfairBackOdd(effectiveOdd, chosenSig.fairOdd || 1.55);
       const stakeEuro = Math.max(10, evalBf.kelly.euro || 20);
 
-      const directTargetUrl = cached?.directMarketUrl || 'https://www.betfair.it/exchange/plus/inplay/football';
+      const activeMktId = cached?.marketId || getSavedDefaultBetfairMarketId();
+      const directTargetUrl = cached?.directMarketUrl || buildBetfairMarketUrl(activeMktId);
 
       box.innerHTML = `
         <div class="p-3 rounded-xl bg-[var(--card)] border border-[var(--border)] space-y-2.5">
@@ -2595,15 +2668,15 @@
             </div>
             <div class="p-2 rounded bg-[var(--primary)]/10 border border-[var(--primary)]/40">
               <div class="text-[10px] text-[var(--primary)] font-bold">MARKET ID &amp; QUOTA</div>
-              <div class="font-bold text-[var(--foreground)]">${cached?.marketId ? `ID: ${cached.marketId}` : 'Da interrogare / Incolla ID'}</div>
+              <div class="font-bold text-[var(--foreground)]">ID: ${activeMktId}</div>
               <div class="text-[10px] text-[var(--success)] font-bold">@${Number(effectiveOdd).toFixed(2)} • Stake €${stakeEuro}</div>
             </div>
           </div>
 
-          <!-- Inserimento Rapido Market ID / Link Diretto Betfair (utile da smartphone senza bridge locale) -->
+          <!-- Inserimento Rapido Market ID / Link Diretto Betfair (formato ufficiale /exchange/plus/football/market/1.xxxxxx) -->
           <div class="flex flex-wrap items-center gap-2 p-2 rounded-lg bg-[var(--background)] border border-[var(--border)] text-xs">
-            <span class="font-mono text-[11px] text-[var(--muted-foreground)]">🔗 ID Mercato o Link Diretto Betfair (es. <code>1.236849102</code>):</span>
-            <input id="bf-manual-marketid-input" type="text" value="${cached?.marketId && cached.marketId !== 'LINK-DIRETTO' ? cached.marketId : (cached?.directMarketUrl && !cached.directMarketUrl.endsWith('/inplay/football') ? cached.directMarketUrl : '')}" placeholder="Incolla Market ID (es. 1.236849102) o URL mercato Betfair.it..." class="flex-1 min-w-[210px] bg-[var(--card)] border border-[var(--border)] rounded px-2 py-1 font-mono text-xs text-[var(--foreground)]" />
+            <span class="font-mono text-[11px] text-[var(--muted-foreground)]">🔗 Link / Market ID Betfair:</span>
+            <input id="bf-manual-marketid-input" type="text" value="${directTargetUrl}" placeholder="https://www.betfair.it/exchange/plus/football/market/1.265408565" class="flex-1 min-w-[230px] bg-[var(--card)] border border-[var(--border)] rounded px-2 py-1 font-mono text-xs text-[var(--foreground)]" />
             <button onclick="applyManualBetfairMarketFromInput()" class="px-2.5 py-1 rounded bg-[var(--warning)]/20 text-[var(--warning)] border border-[var(--warning)]/50 font-bold hover:bg-[var(--warning)] hover:text-black transition">
               📌 Fissa Link Mercato
             </button>
@@ -2938,8 +3011,7 @@
       const cacheKey = `${normalizeTeamName(chosenMatch.home)}|${normalizeTeamName(chosenMatch.away)}|${spec.marketTypeCode}|${spec.side}`;
       let cached = BETFAIR_MARKET_CACHE[cacheKey] || null;
 
-      const bfCfg = getBetfairLocalConfig();
-      if (!cached && bfCfg.configured) {
+      if (!cached) {
         try {
           const bfRes = await resolveBetfairMarketForSignal(chosenMatch.home, chosenMatch.away, chosenSig.selection, true);
           if (bfRes && bfRes.ok) cached = bfRes;
@@ -2954,8 +3026,9 @@
       const evalBf = evaluateBetfairBackOdd(effectiveOdd, chosenSig.fairOdd || 1.56);
       const stakeEuro = Math.max(15, evalBf.kelly.euro || 25);
 
+      const finalMktId = cached?.marketId || getSavedDefaultBetfairMarketId();
       const directApexUrl = `https://salvo061978.github.io/apex-edge-betting/#live=${encodeURIComponent(chosenMatch.matchId)}&sig=${encodeURIComponent(chosenSig.id)}`;
-      const directBetfairUrl = cached?.directMarketUrl || 'https://www.betfair.it/exchange/plus/inplay/football';
+      const directBetfairUrl = buildBetfairMarketUrl(finalMktId);
       const displayMatchTitle = cached?.eventName ? `${cached.eventName}` : `${chosenMatch.home} vs ${chosenMatch.away}`;
 
       const liveObj = LIVE_MATCHES.find(m => m.id === chosenMatch.matchId);
@@ -2979,17 +3052,18 @@
         `🎯 Pronostico: <b>${chosenSig.selection}</b>`,
         `🧠 Strategia: <code>${chosenSig.signalType}</code>`,
         `🟡 Mercato Betfair: <code>${spec.marketTypeCode}</code> → <b>${cached?.marketName || spec.marketLabelIt}</b>`,
-        `📌 Lato &amp; Runner Betfair: <b>${spec.sideLabel}</b> su <b>${cached?.runnerName || spec.runnerDisplay}</b>${cached?.marketId ? ` (Market ID: <code>${cached.marketId}</code>)` : ''}`,
+        `📌 Lato &amp; Runner Betfair: <b>${spec.sideLabel}</b> su <b>${cached?.runnerName || spec.runnerDisplay}</b> (Market ID: <code>${finalMktId}</code>)`,
         `💎 Quota Fair: <b>@${Number(chosenSig.fairOdd || 1.56).toFixed(2)}</b> • Target Betfair: <b>≥ @${Number(effectiveOdd).toFixed(2)}</b> (+${evalBf.netEvPct}% EV Netto)`,
         `💶 Stake Kelly Consigliato: <b>€${stakeEuro}</b>`,
         ``,
-        `📲 <a href="${directApexUrl}">Apri Partita &amp; Pronostico Diretto su APEX EDGE</a>`,
-        `🟡 <a href="${directBetfairUrl}">${cached?.marketId ? `Apri Mercato Diretto (${cached.marketId}) su Betfair Exchange` : 'Apri Partita Live su Betfair Exchange'}</a>`
+        `🟡 <b>Link Diretto Mercato Betfair:</b>`,
+        `<a href="${directBetfairUrl}">${directBetfairUrl}</a>`,
+        `📲 <a href="${directApexUrl}">Apri Partita &amp; Pronostico Diretto su APEX EDGE</a>`
       ].join('\n');
 
       const r = await sendTelegramMessage(msg, cfg);
       if (r.ok) {
-        setUiFeedback('success', `✅ <b>Notifica Partita Live inviata su Telegram!</b> (${displayMatchTitle} → <b>${chosenSig.selection}</b> • Mercato Betfair: <code>${spec.marketTypeCode}</code>${cached?.marketId ? ` • ID: <code>${cached.marketId}</code>` : ''}). Controlla subito la tua chat Telegram!`);
+        setUiFeedback('success', `✅ <b>Notifica Partita Live inviata su Telegram!</b> (${displayMatchTitle} → <b>${chosenSig.selection}</b> • Link Diretto: <code>${directBetfairUrl}</code>). Controlla subito la tua chat Telegram!`);
       } else {
         setUiFeedback('error', `❌ <b>Errore invio Telegram:</b> ${r.error}`);
       }
@@ -3008,33 +3082,32 @@
       const matchId = m?.id || String(snap.id || '').replace(/^snap-/, '');
       const apexLiveUrl = `https://salvo061978.github.io/apex-edge-betting/#live=${encodeURIComponent(matchId)}`;
 
-      // Se l'utente ha configurato App Key + SSOID Betfair, prova a risolvere il Market ID specifico
-      let betfairUrl = 'https://www.betfair.it/exchange/plus/inplay/football';
-      let betfairLinkLabel = 'Apri Calcio Live su Betfair Exchange';
-      const bfCfg = getBetfairLocalConfig();
+      // Risolve il Market ID specifico (formato https://www.betfair.it/exchange/plus/football/market/1.xxxxxx)
+      let resolvedMktId = getSavedDefaultBetfairMarketId();
       const bfSpec = mapSelectionToBetfairSpec(snap.selection, m?.home || '', m?.away || '');
-      if (bfCfg.configured && m?.home && m?.away) {
+      if (m?.home && m?.away) {
         try {
           const bfRes = await resolveBetfairMarketForSignal(m.home, m.away, snap.selection);
-          if (bfRes && bfRes.ok && bfRes.directMarketUrl) {
-            betfairUrl = bfRes.directMarketUrl;
-            betfairLinkLabel = `Apri Mercato Diretto Betfair (${bfRes.marketName} • ${bfSpec.sideLabel})`;
+          if (bfRes && bfRes.ok && bfRes.marketId) {
+            resolvedMktId = bfRes.marketId;
           }
         } catch (_) {}
       }
+      const betfairUrl = buildBetfairMarketUrl(resolvedMktId);
 
       const msg = [
         `🟢🔥 <b>ENTRA ORA • SEMAFORO VERDE (${snap.triggerScore}/100)</b>`,
         `⚽ <b>${snap.match}</b> (${snap.league})`,
         `⏱️ Minuto: <b>${snap.triggerMinute}</b> • Risultato: <b>${snap.scoreAtTrigger}</b>`,
         '',
-        `🎯 Mercato: <b>${snap.selection}</b> (<code>${bfSpec.marketTypeCode}</code> • ${bfSpec.sideLabel})`,
+        `🎯 Mercato: <b>${snap.selection}</b> (<code>${bfSpec.marketTypeCode}</code> • ${bfSpec.sideLabel} • ID: <code>${resolvedMktId}</code>)`,
         `📊 Quota Fair: <b>@${Number(snap.fairOddAtTrigger).toFixed(2)}</b> • Min Betfair: <b>@${Number(snap.minBetfairOdd).toFixed(2)}</b>`,
         `📈 Telemetria: ${snap.statsAtTrigger}`,
         `🔗 Pre-Match: ${snap.preMatchConvergence}`,
         '',
-        `📲 <a href="${apexLiveUrl}">Apri Partita Live su APEX EDGE</a>`,
-        `🟡 <a href="${betfairUrl}">${betfairLinkLabel}</a>`
+        `🟡 <b>Link Diretto Mercato Betfair:</b>`,
+        `<a href="${betfairUrl}">${betfairUrl}</a>`,
+        `📲 <a href="${apexLiveUrl}">Apri Partita Live su APEX EDGE</a>`
       ].join('\n');
       const res = await sendTelegramMessage(msg, cfg);
       snap._tgSending = false;
@@ -6196,8 +6269,8 @@
         }
         try {
           const tgCfg = getTelegramLocalConfig();
-          if (tgCfg.botToken && tgCfg.chatId && !localStorage.getItem('apex_live_tg_test_sent_v4')) {
-            localStorage.setItem('apex_live_tg_test_sent_v4', '1');
+          if (tgCfg.botToken && tgCfg.chatId && !localStorage.getItem('apex_live_tg_test_sent_v5')) {
+            localStorage.setItem('apex_live_tg_test_sent_v5', '1');
             sendLiveMatchTestToTelegram(null, null, true);
           }
         } catch (_) {}

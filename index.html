@@ -276,8 +276,12 @@
             </div>
 
             <div class="flex flex-wrap items-center gap-1.5">
+              <button onclick="openBetfairLiveConnectorPanel()" class="px-2.5 py-1.5 rounded-lg text-[11px] md:text-xs font-bold bg-[var(--success)]/15 border border-[var(--success)]/50 text-[var(--success)] hover:bg-[var(--success)]/25 transition flex items-center gap-1">
+                <span>🎯 Collega Partita → Pronostico Betfair</span>
+                <span id="bf-header-status-pill" class="px-1.5 py-0.2 rounded text-[9px] font-mono bg-[var(--card)] border border-[var(--border)] text-[var(--muted-foreground)]">API</span>
+              </button>
               <button onclick="toggleBetfairVaultPanel()" class="px-2.5 py-1.5 rounded-lg text-[11px] md:text-xs font-bold bg-[var(--warning)]/15 border border-[var(--warning)]/50 text-[var(--warning)] hover:bg-[var(--warning)]/25 transition">
-                🔐 Betfair & Telegram (Locale • Zero GitHub)
+                🔐 Credenziali Betfair & Telegram
               </button>
               <button id="btn-toggle-live-autorefresh" onclick="toggleLiveAutoRefresh()" class="px-2.5 py-1.5 rounded-lg text-[11px] md:text-xs font-mono font-bold bg-[var(--background)] border border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)] transition">
                 ▶️ Auto-Sync 25s: ON
@@ -318,9 +322,10 @@
 
           <!-- PANNELLO CASSAFORTE LOCALE BETFAIR & TELEGRAM (SOLO DISPOSITIVO, MAI SU GITHUB) -->
           <div id="betfair-vault-panel" class="hidden p-3 rounded-xl bg-[var(--background)] border-2 border-[var(--warning)]/60 space-y-3 text-xs">
-            <div class="flex items-center justify-between border-b border-[var(--border)] pb-2">
-              <div class="font-bold text-[var(--warning)] flex items-center gap-1.5">
+            <div class="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] pb-2">
+              <div class="font-bold text-[var(--warning)] flex flex-wrap items-center gap-1.5">
                 <span>🔐 Cassaforte Privata Locale — Betfair API & Notifiche Telegram (0% su GitHub)</span>
+                <span id="bf-api-vault-badge" class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-[var(--secondary)] text-[var(--muted-foreground)]">BETFAIR NON CONFIGURATO</span>
               </div>
               <button onclick="toggleBetfairVaultPanel()" class="px-2 py-0.5 rounded bg-[var(--secondary)] font-bold">✕ Chiudi</button>
             </div>
@@ -338,7 +343,7 @@
               </div>
               <div>
                 <label class="block text-[10px] font-mono uppercase text-[var(--muted-foreground)] mb-1">URL Bridge Locale Auto-Bet (Opzionale)</label>
-                <input id="bf-local-bridge" type="text" placeholder="http://127.0.0.1:8787/placeOrder" class="w-full bg-[var(--card)] border border-[var(--border)] rounded px-2.5 py-1.5 font-mono text-xs text-[var(--foreground)]" />
+                <input id="bf-local-bridge" type="text" placeholder="http://127.0.0.1:8787" class="w-full bg-[var(--card)] border border-[var(--border)] rounded px-2.5 py-1.5 font-mono text-xs text-[var(--foreground)]" />
               </div>
             </div>
 
@@ -380,11 +385,36 @@
             <div class="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-[var(--border)]">
               <span id="bf-vault-status" class="font-mono text-[11px] text-[var(--success)]">🔒 Nessuna credenziale presente su GitHub. Cassaforte locale pronta.</span>
               <div class="flex flex-wrap items-center gap-2">
+                <button onclick="testAndConnectBetfairFromVault()" class="px-2.5 py-1 rounded bg-[var(--warning)]/20 text-[var(--warning)] border border-[var(--warning)]/50 font-bold hover:bg-[var(--warning)]/30 transition">🎯 Test & Collega Pronostico Betfair</button>
                 <button onclick="testTelegramNotification()" class="px-2.5 py-1 rounded bg-[#38bdf8]/20 text-[#38bdf8] border border-[#38bdf8]/40 font-bold hover:bg-[#38bdf8]/30 transition">📲 Test Telegram</button>
                 <button onclick="saveBetfairLocalVault()" class="px-3 py-1 rounded bg-[var(--primary)] text-[var(--primary-foreground)] font-bold">💾 Salva Tutto Solo in Locale</button>
                 <button onclick="clearBetfairLocalVault()" class="px-2.5 py-1 rounded bg-[var(--error)]/20 text-[var(--error)] border border-[var(--error)]/40 font-bold">🗑️ Cancella Dati Locali</button>
               </div>
             </div>
+          </div>
+
+          <!-- PANNELLO COLLEGAMENTO DIRETTO PARTITA LIVE ↔ PRONOSTICO BETFAIR EXCHANGE -->
+          <div id="betfair-live-connector-panel" class="hidden p-3 md:p-4 rounded-xl bg-[var(--background)] border-2 border-[var(--primary)] space-y-3 text-xs">
+            <div class="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] pb-2">
+              <div class="font-bold text-sm text-[var(--primary)] flex flex-wrap items-center gap-2">
+                <span>🎯 Ponte Diretto Partita Live → Mercato &amp; Pronostico Betfair Exchange</span>
+                <span id="bf-conn-cred-badge" class="px-2 py-0.5 rounded text-[10px] font-mono bg-[var(--secondary)] text-[var(--muted-foreground)]">VERIFICA TOKEN...</span>
+              </div>
+              <button onclick="closeBetfairLiveConnectorPanel()" class="px-2.5 py-1 rounded bg-[var(--secondary)] hover:bg-[var(--error)]/20 hover:text-[var(--error)] font-bold">✕ Chiudi</button>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+              <div>
+                <label class="block text-[10px] font-mono uppercase text-[var(--muted-foreground)] mb-1">1. Seleziona Partita (In Corso Live o Palinsesto Odierno)</label>
+                <select id="bf-conn-match-select" onchange="onChangeBetfairConnectorMatch()" class="w-full bg-[var(--card)] border border-[var(--border)] rounded-lg px-2.5 py-2 font-bold text-xs text-[var(--foreground)]"></select>
+              </div>
+              <div>
+                <label class="block text-[10px] font-mono uppercase text-[var(--muted-foreground)] mb-1">2. Seleziona Pronostico Specifico da Collegare a Betfair</label>
+                <select id="bf-conn-sig-select" onchange="renderBetfairConnectorDetails()" class="w-full bg-[var(--card)] border border-[var(--border)] rounded-lg px-2.5 py-2 font-bold text-xs text-[var(--primary)]"></select>
+              </div>
+            </div>
+
+            <div id="bf-conn-details-box" class="space-y-2.5"></div>
           </div>
         </div>
 
@@ -1827,6 +1857,79 @@
       }
     }
 
+    const BETFAIR_MARKET_CACHE = {};
+    let _bfConnectorStatusMsg = '';
+    let _bfConnectorStatusType = 'info';
+
+    function getBetfairLocalConfig() {
+      let parsed = null;
+      try {
+        const raw = localStorage.getItem(BETFAIR_LOCAL_VAULT_KEY);
+        if (raw) parsed = JSON.parse(raw);
+      } catch (_) {}
+      if (!parsed && window._apexBetfairMemCfg) parsed = window._apexBetfairMemCfg;
+      const domAk = document.getElementById('bf-local-appkey')?.value.trim() || '';
+      const domSs = document.getElementById('bf-local-ssoid')?.value.trim() || '';
+      const domBr = document.getElementById('bf-local-bridge')?.value.trim() || '';
+      const appKey = domAk || String(parsed?.appKey || '').trim();
+      const ssoid = domSs || String(parsed?.ssoid || '').trim();
+      const bridgeUrl = domBr || String(parsed?.bridgeUrl || 'http://127.0.0.1:8787').trim();
+      return {
+        appKey,
+        ssoid,
+        bridgeUrl,
+        configured: Boolean(appKey && ssoid)
+      };
+    }
+
+    function updateBetfairVaultBadge(bfCfg = null) {
+      const cfg = bfCfg || getBetfairLocalConfig();
+      const badge = document.getElementById('bf-api-vault-badge');
+      const pill = document.getElementById('bf-header-status-pill');
+      const connBadge = document.getElementById('bf-conn-cred-badge');
+      if (cfg.appKey && cfg.ssoid) {
+        const maskKey = cfg.appKey.length > 4 ? `${cfg.appKey.slice(0, 3)}•••${cfg.appKey.slice(-2)}` : 'ATTIVA';
+        if (badge) {
+          badge.textContent = `🟢 KEY + TOKEN ATTIVI (${maskKey})`;
+          badge.className = 'px-1.5 py-0.5 rounded text-[10px] font-mono bg-[var(--success)]/20 text-[var(--success)] border border-[var(--success)]/40';
+        }
+        if (pill) {
+          pill.textContent = '🟢 KEY+TOKEN OK';
+          pill.className = 'px-1.5 py-0.2 rounded text-[9px] font-mono bg-[var(--success)] text-white font-bold';
+        }
+        if (connBadge) {
+          connBadge.textContent = `🟢 KEY (${maskKey}) + SSOID PRONTI`;
+          connBadge.className = 'px-2 py-0.5 rounded text-[10px] font-mono bg-[var(--success)]/20 text-[var(--success)] border border-[var(--success)]/40 font-bold';
+        }
+      } else if (cfg.appKey || cfg.ssoid) {
+        if (badge) {
+          badge.textContent = '🟡 INCOMPLETO (SERVONO KEY + SSOID)';
+          badge.className = 'px-1.5 py-0.5 rounded text-[10px] font-mono bg-[var(--warning)]/20 text-[var(--warning)] border border-[var(--warning)]/40';
+        }
+        if (pill) {
+          pill.textContent = '🟡 PARZIALE';
+          pill.className = 'px-1.5 py-0.2 rounded text-[9px] font-mono bg-[var(--warning)]/20 text-[var(--warning)] border border-[var(--warning)]/40';
+        }
+        if (connBadge) {
+          connBadge.textContent = `🟡 MANCA ${cfg.appKey ? 'SSOID TOKEN' : 'APP KEY'}`;
+          connBadge.className = 'px-2 py-0.5 rounded text-[10px] font-mono bg-[var(--warning)]/20 text-[var(--warning)] border border-[var(--warning)]/40 font-bold';
+        }
+      } else {
+        if (badge) {
+          badge.textContent = 'BETFAIR NON CONFIGURATO';
+          badge.className = 'px-1.5 py-0.5 rounded text-[10px] font-mono bg-[var(--secondary)] text-[var(--muted-foreground)]';
+        }
+        if (pill) {
+          pill.textContent = 'API';
+          pill.className = 'px-1.5 py-0.2 rounded text-[9px] font-mono bg-[var(--card)] border border-[var(--border)] text-[var(--muted-foreground)]';
+        }
+        if (connBadge) {
+          connBadge.textContent = '⚪ INSERISCI KEY & TOKEN IN CASSAFORTE';
+          connBadge.className = 'px-2 py-0.5 rounded text-[10px] font-mono bg-[var(--secondary)] text-[var(--muted-foreground)]';
+        }
+      }
+    }
+
     function loadBetfairLocalVault() {
       try {
         const raw = localStorage.getItem(BETFAIR_LOCAL_VAULT_KEY);
@@ -1838,6 +1941,7 @@
         if (ak && v.appKey) ak.value = v.appKey;
         if (ss && v.ssoid) ss.value = v.ssoid;
         if (br && v.bridgeUrl) br.value = v.bridgeUrl;
+        updateBetfairVaultBadge({ appKey: v.appKey || '', ssoid: v.ssoid || '', bridgeUrl: v.bridgeUrl || '' });
 
         const tg = getTelegramLocalConfig();
         const tgTok = document.getElementById('tg-local-token');
@@ -1859,37 +1963,58 @@
     }
 
     function saveBetfairLocalVault() {
-      const appKey = document.getElementById('bf-local-appkey')?.value.trim() || '';
-      const ssoid = document.getElementById('bf-local-ssoid')?.value.trim() || '';
-      const bridgeUrl = document.getElementById('bf-local-bridge')?.value.trim() || 'http://127.0.0.1:8787/placeOrder';
-      const botToken = document.getElementById('tg-local-token')?.value.trim() || '';
-      const chatId = document.getElementById('tg-local-chatid')?.value.trim() || '';
-      const threadId = document.getElementById('tg-local-threadid')?.value.trim() || '';
+      let prevBf = {};
+      try { prevBf = JSON.parse(localStorage.getItem(BETFAIR_LOCAL_VAULT_KEY) || '{}') || {}; } catch (_) {}
+      const domAk = document.getElementById('bf-local-appkey')?.value.trim() || '';
+      const domSs = document.getElementById('bf-local-ssoid')?.value.trim() || '';
+      const domBr = document.getElementById('bf-local-bridge')?.value.trim() || '';
+      const appKey = domAk || String(prevBf.appKey || '').trim();
+      const ssoid = domSs || String(prevBf.ssoid || '').trim();
+      const bridgeUrl = domBr || String(prevBf.bridgeUrl || 'http://127.0.0.1:8787').trim();
+
+      let prevTg = {};
+      try { prevTg = JSON.parse(localStorage.getItem(TELEGRAM_LOCAL_VAULT_KEY) || '{}') || {}; } catch (_) {}
+      const domTok = document.getElementById('tg-local-token')?.value.trim() || '';
+      const domChat = document.getElementById('tg-local-chatid')?.value.trim() || '';
+      const domThread = document.getElementById('tg-local-threadid')?.value.trim() || '';
+      const botToken = domTok || String(prevTg.botToken || '').trim();
+      const chatId = domChat || String(prevTg.chatId || '').trim();
+      const threadId = domThread || String(prevTg.threadId || '').trim();
       const enabled = document.getElementById('tg-local-enabled')?.checked !== false;
       const notifyResults = document.getElementById('tg-local-results')?.checked !== false;
       const tgCfg = { botToken, chatId, threadId, enabled, notifyResults, savedAt: new Date().toISOString() };
+      const bfCfg = { appKey, ssoid, bridgeUrl, savedAt: new Date().toISOString() };
 
       window._apexTelegramMemCfg = tgCfg;
+      window._apexBetfairMemCfg = bfCfg;
       updateTelegramVaultBadge(tgCfg);
+      updateBetfairVaultBadge(bfCfg);
 
       const st = document.getElementById('bf-vault-status');
       try {
-        localStorage.setItem(BETFAIR_LOCAL_VAULT_KEY, JSON.stringify({ appKey, ssoid, bridgeUrl, savedAt: new Date().toISOString() }));
+        localStorage.setItem(BETFAIR_LOCAL_VAULT_KEY, JSON.stringify(bfCfg));
         localStorage.setItem(TELEGRAM_LOCAL_VAULT_KEY, JSON.stringify(tgCfg));
         if (st) {
-          st.textContent = (botToken && chatId)
-            ? '✅ Salvato nella memoria privata di questo dispositivo! Nessun dato viene mai inviato a GitHub.'
-            : '⚠️ Dati Betfair salvati, ma mancano Bot Token o Chat ID per Telegram.';
+          if (appKey && ssoid && botToken && chatId) {
+            st.textContent = '✅ Betfair (Key + SSOID) e Telegram salvati nella memoria privata di questo dispositivo!';
+          } else if (appKey && ssoid) {
+            st.textContent = '✅ Betfair App Key e SSOID salvati in locale! Ora puoi collegare qualsiasi partita e pronostico Live.';
+          } else if (botToken && chatId) {
+            st.textContent = '✅ Telegram salvato in locale! (Inserisci anche App Key e SSOID per l\'API Betfair).';
+          } else {
+            st.textContent = '⚠️ Inserisci App Key + SSOID per Betfair oppure Bot Token + Chat ID per Telegram.';
+          }
         }
       } catch (err) {
         if (st) {
-          st.textContent = '⚠️ Browser in modalità privata o storage bloccato: attivo solo per questa sessione (non verrà ricordato dopo il refresh).';
+          st.textContent = '⚠️ Browser in modalità privata: credenziali attive per questa sessione.';
         }
       }
     }
 
     function clearBetfairLocalVault() {
       window._apexTelegramMemCfg = null;
+      window._apexBetfairMemCfg = null;
       try {
         localStorage.removeItem(BETFAIR_LOCAL_VAULT_KEY);
         localStorage.removeItem(TELEGRAM_LOCAL_VAULT_KEY);
@@ -1906,7 +2031,677 @@
       if (tgChat) tgChat.value = '';
       if (tgThread) tgThread.value = '';
       updateTelegramVaultBadge({ botToken: '', chatId: '', enabled: false });
+      updateBetfairVaultBadge({ appKey: '', ssoid: '' });
       if (st) st.textContent = '🗑️ Credenziali locali Betfair e Telegram rimosse da questo dispositivo.';
+    }
+
+    /**
+     * Traduce un pronostico quantitativo APEX EDGE (es. "Over 2.5 Gol Live", "Over 0.5 Gol 1°T",
+     * "Germania DNB Live", "Lay The Draw (Banca X Live)", "Under 2.5 Gol Live")
+     * nei parametri ufficiali dell'API Betfair Exchange (marketTypeCode, runner, side BACK/LAY).
+     */
+    function mapSelectionToBetfairSpec(selection, homeTeam = '', awayTeam = '') {
+      const raw = String(selection || '').trim();
+      const primary = raw.replace(/\([^)]*\)/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+      const cleanHome = String(homeTeam || '').replace(/[^\p{L}\p{N}\s.-]/gu, '').trim();
+      const cleanAway = String(awayTeam || '').replace(/[^\p{L}\p{N}\s.-]/gu, '').trim();
+      const enHome = normalizeTeamName(cleanHome) || cleanHome;
+      const enAway = normalizeTeamName(cleanAway) || cleanAway;
+
+      // 1) Over/Under 1° Tempo (First Half Goals)
+      if (primary.includes('1°t') || primary.includes('1t') || primary.includes('primo tempo') || raw.toLowerCase().includes('1°t')) {
+        const mLine = primary.match(/(over|under)\s*(\d+(?:\.\d+)?)/);
+        const isUnder = mLine ? mLine[1] === 'under' : false;
+        const lineStr = mLine ? mLine[2] : '0.5';
+        const codeNum = lineStr.replace('.', '');
+        const marketTypeCode = `FIRST_HALF_GOALS_${codeNum}`;
+        const runnerEn = `${isUnder ? 'Under' : 'Over'} ${lineStr} Goals`;
+        const runnerIt = `${isUnder ? 'Meno' : 'Più'} di ${lineStr.replace('.', ',')} gol`;
+        return {
+          marketTypeCode,
+          fallbackMarketTypeCodes: ['FIRST_HALF_GOALS_05', 'FIRST_HALF_GOALS_15', 'OVER_UNDER_15', 'OVER_UNDER_25'],
+          marketLabelIt: `Gol 1° Tempo (${isUnder ? 'Under' : 'Over'} ${lineStr} 1°T)`,
+          runnerDisplay: `${runnerEn} / ${runnerIt}`,
+          runnerCandidates: [runnerEn.toLowerCase(), runnerIt.toLowerCase(), `${isUnder ? 'under' : 'over'} ${lineStr}`],
+          side: 'BACK',
+          sideLabel: 'PUNTA (BACK)',
+          searchQuery: `${cleanHome} ${cleanAway}`.trim(),
+          enQuery: `${enHome} ${enAway}`.trim()
+        };
+      }
+
+      // 2) Lay The Draw (Banca Pareggio su Esito Finale 1X2)
+      if (raw.toLowerCase().includes('lay the draw') || raw.toLowerCase().includes('banca x')) {
+        return {
+          marketTypeCode: 'MATCH_ODDS',
+          fallbackMarketTypeCodes: ['MATCH_ODDS', 'DOUBLE_CHANCE'],
+          marketLabelIt: 'Esito Finale 1X2 (Banca Pareggio / Lay The Draw)',
+          runnerDisplay: 'The Draw / Pareggio (BANCA)',
+          runnerCandidates: ['the draw', 'pareggio', 'draw', 'x'],
+          side: 'LAY',
+          sideLabel: 'BANCA (LAY)',
+          searchQuery: `${cleanHome} ${cleanAway}`.trim(),
+          enQuery: `${enHome} ${enAway}`.trim()
+        };
+      }
+
+      // 3) Draw No Bet / Prossimo Gol / Dominio Squadra
+      if (primary.includes('dnb') || primary.includes('prossimo gol')) {
+        const isAway = /\b2\s*dnb\b/.test(primary) || (cleanAway && teamNamesMatch(cleanAway, primary.split('dnb')[0]));
+        const targetTeamIt = isAway ? cleanAway : cleanHome;
+        const targetTeamEn = isAway ? enAway : enHome;
+        return {
+          marketTypeCode: 'DRAW_NO_BET',
+          fallbackMarketTypeCodes: ['DRAW_NO_BET', 'MATCH_ODDS'],
+          marketLabelIt: `Draw No Bet / Rimborso Pareggio (${targetTeamIt})`,
+          runnerDisplay: `${targetTeamIt} (${targetTeamEn})`,
+          runnerCandidates: [normalizeTeamName(targetTeamIt), normalizeTeamName(targetTeamEn), targetTeamIt.toLowerCase(), targetTeamEn.toLowerCase()],
+          isTeamRunner: true,
+          targetTeam: targetTeamIt,
+          side: 'BACK',
+          sideLabel: 'PUNTA (BACK)',
+          searchQuery: `${cleanHome} ${cleanAway}`.trim(),
+          enQuery: `${enHome} ${enAway}`.trim()
+        };
+      }
+
+      // 4) Over / Under X.5 Gol (Match Intero)
+      const ouMatch = primary.match(/(over|under)\s*(\d+(?:\.\d+)?)/);
+      if (ouMatch && !primary.includes('1x') && !primary.includes('x2')) {
+        const isUnder = ouMatch[1] === 'under';
+        const rawLine = parseFloat(ouMatch[2]);
+        const stdLine = [0.5, 1.5, 2.5, 3.5, 4.5].includes(rawLine) ? rawLine.toFixed(1) : '2.5';
+        const codeNum = stdLine.replace('.', '');
+        const marketTypeCode = `OVER_UNDER_${codeNum}`;
+        const runnerEn = `${isUnder ? 'Under' : 'Over'} ${stdLine} Goals`;
+        const runnerIt = `${isUnder ? 'Meno' : 'Più'} di ${stdLine.replace('.', ',')} gol`;
+        return {
+          marketTypeCode,
+          fallbackMarketTypeCodes: [marketTypeCode, 'OVER_UNDER_25', 'OVER_UNDER_15', 'OVER_UNDER_35', 'OVER_UNDER_05'],
+          marketLabelIt: `Più/Meno ${stdLine} Gol (${isUnder ? 'Under' : 'Over'} ${stdLine})`,
+          runnerDisplay: `${runnerEn} / ${runnerIt}`,
+          runnerCandidates: [runnerEn.toLowerCase(), runnerIt.toLowerCase(), `${isUnder ? 'under' : 'over'} ${stdLine}`],
+          side: 'BACK',
+          sideLabel: 'PUNTA (BACK)',
+          searchQuery: `${cleanHome} ${cleanAway}`.trim(),
+          enQuery: `${enHome} ${enAway}`.trim()
+        };
+      }
+
+      // 5) Entrambe Segnano (BTTS)
+      if (primary.includes('goal') || primary.includes('btts')) {
+        return {
+          marketTypeCode: 'BOTH_TEAMS_TO_SCORE',
+          fallbackMarketTypeCodes: ['BOTH_TEAMS_TO_SCORE', 'OVER_UNDER_25'],
+          marketLabelIt: 'Entrambe le Squadre Segnano (Goal / BTTS Sì)',
+          runnerDisplay: 'Yes / Sì',
+          runnerCandidates: ['yes', 'sì', 'si'],
+          side: 'BACK',
+          sideLabel: 'PUNTA (BACK)',
+          searchQuery: `${cleanHome} ${cleanAway}`.trim(),
+          enQuery: `${enHome} ${enAway}`.trim()
+        };
+      }
+
+      // 6) Default: Esito Finale 1X2 / Doppia Chance
+      const isAwayPick = /\b2\b/.test(primary) || /\bx2\b/.test(primary);
+      const targetTeamIt = isAwayPick ? cleanAway : cleanHome;
+      const targetTeamEn = isAwayPick ? enAway : enHome;
+      return {
+        marketTypeCode: 'MATCH_ODDS',
+        fallbackMarketTypeCodes: ['MATCH_ODDS', 'DRAW_NO_BET'],
+        marketLabelIt: `Esito Finale 1X2 (${targetTeamIt})`,
+        runnerDisplay: `${targetTeamIt} (${targetTeamEn})`,
+        runnerCandidates: [normalizeTeamName(targetTeamIt), normalizeTeamName(targetTeamEn), targetTeamIt.toLowerCase()],
+        isTeamRunner: true,
+        targetTeam: targetTeamIt,
+        side: 'BACK',
+        sideLabel: 'PUNTA (BACK)',
+        searchQuery: `${cleanHome} ${cleanAway}`.trim(),
+        enQuery: `${enHome} ${enAway}`.trim()
+      };
+    }
+
+    async function callBetfairExchangeApi(method, params) {
+      const cfg = getBetfairLocalConfig();
+      if (!cfg.appKey || !cfg.ssoid) {
+        return { ok: false, missingCreds: true, error: 'Inserisci sia la Betfair App Key sia il Session Token (SSOID) nella Cassaforte Locale.' };
+      }
+
+      const headers = {
+        'X-Application': cfg.appKey,
+        'X-Authentication': cfg.ssoid,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      };
+
+      const endpoints = [];
+      if (cfg.bridgeUrl && cfg.bridgeUrl.startsWith('http')) {
+        const cleanBridge = cfg.bridgeUrl.replace(/\/placeOrder\/?$/i, '').replace(/\/+$/, '');
+        endpoints.push({ url: `${cleanBridge}/${method}`, isBridge: true });
+      }
+      endpoints.push({ url: `https://api.betfair.it/exchange/betting/rest/v1.0/${method}/`, isBridge: false });
+      endpoints.push({ url: `https://api.betfair.com/exchange/betting/rest/v1.0/${method}/`, isBridge: false });
+
+      let lastErr = '';
+      let corsDetected = false;
+
+      for (const ep of endpoints) {
+        try {
+          const res = await fetch(ep.url, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(params)
+          });
+          if (res.ok) {
+            const data = await res.json();
+            return { ok: true, data, endpoint: ep.url };
+          } else {
+            const errTxt = await res.text().catch(() => '');
+            if (res.status === 401 || res.status === 403 || errTxt.includes('INVALID_SESSION_INFORMATION') || errTxt.includes('ANGX-0003')) {
+              return { ok: false, authError: true, error: `Session Token (SSOID) o App Key rifiutati da Betfair (${res.status}). Verifica che il token SSOID di Betfair.it sia attivo.` };
+            }
+            lastErr = `HTTP ${res.status}: ${errTxt.slice(0, 120)}`;
+          }
+        } catch (err) {
+          const msg = String(err?.message || err || '');
+          if (!ep.isBridge && (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('Load failed'))) {
+            corsDetected = true;
+          }
+          lastErr = msg;
+        }
+      }
+
+      return {
+        ok: false,
+        corsBlocked: corsDetected,
+        error: corsDetected
+          ? 'Il browser ha bloccato la richiesta diretta per policy CORS sugli header X-Application/X-Authentication di Betfair.'
+          : (lastErr || 'Impossibile contattare Betfair Exchange API.')
+      };
+    }
+
+    async function resolveBetfairMarketForSignal(homeTeam, awayTeam, selection) {
+      const spec = mapSelectionToBetfairSpec(selection, homeTeam, awayTeam);
+      const cacheKey = `${normalizeTeamName(homeTeam)}|${normalizeTeamName(awayTeam)}|${spec.marketTypeCode}|${spec.side}`;
+
+      const startFrom = new Date(Date.now() - 6 * 3600 * 1000).toISOString();
+      const startTo = new Date(Date.now() + 72 * 3600 * 1000).toISOString();
+
+      const catRes = await callBetfairExchangeApi('listMarketCatalogue', {
+        filter: {
+          eventTypeIds: ['1'],
+          marketTypeCodes: spec.fallbackMarketTypeCodes,
+          marketStartTime: { from: startFrom, to: startTo }
+        },
+        marketProjection: ['EVENT', 'RUNNER_DESCRIPTION', 'MARKET_DESCRIPTION', 'MARKET_START_TIME'],
+        maxResults: '200'
+      });
+
+      if (!catRes.ok) {
+        return { ok: false, spec, ...catRes };
+      }
+
+      const catalogues = Array.isArray(catRes.data) ? catRes.data : [];
+      const matchingCats = catalogues.filter(c => {
+        const evName = c?.event?.name || '';
+        const parts = evName.split(/\s+v\s+|\s+vs\.?\s+|\s+-\s+/i);
+        if (parts.length >= 2) {
+          return (teamNamesMatch(parts[0], homeTeam) && teamNamesMatch(parts[1], awayTeam)) ||
+                 (teamNamesMatch(parts[0], homeTeam) || teamNamesMatch(parts[1], awayTeam));
+        }
+        return teamNamesMatch(evName, homeTeam) || teamNamesMatch(evName, awayTeam);
+      });
+
+      if (matchingCats.length === 0) {
+        return {
+          ok: false,
+          spec,
+          notFound: true,
+          error: `Connessione API Betfair riuscita (${catalogues.length} mercati ricevuti), ma il mercato "${spec.marketTypeCode}" per "${homeTeam} - ${awayTeam}" non è ancora aperto o ha un nome diverso su Betfair.`
+        };
+      }
+
+      const chosenCat = matchingCats.find(c => c.description?.marketType === spec.marketTypeCode) || matchingCats[0];
+      const runners = chosenCat.runners || [];
+      let chosenRunner = null;
+      for (const r of runners) {
+        const rName = String(r.runnerName || '').toLowerCase();
+        if (spec.isTeamRunner && teamNamesMatch(r.runnerName, spec.targetTeam)) {
+          chosenRunner = r;
+          break;
+        }
+        if (spec.runnerCandidates.some(cand => rName === cand || rName.includes(cand))) {
+          chosenRunner = r;
+          break;
+        }
+      }
+      if (!chosenRunner && runners.length > 0) chosenRunner = runners[0];
+
+      const resolved = {
+        ok: true,
+        spec,
+        eventId: chosenCat.event?.id || '',
+        eventName: chosenCat.event?.name || `${homeTeam} - ${awayTeam}`,
+        marketId: chosenCat.marketId,
+        marketName: chosenCat.marketName || spec.marketLabelIt,
+        selectionId: chosenRunner ? chosenRunner.selectionId : null,
+        runnerName: chosenRunner ? chosenRunner.runnerName : spec.runnerDisplay,
+        bestBackPrice: null,
+        bestBackSize: null,
+        bestLayPrice: null,
+        bestLaySize: null,
+        directMarketUrl: `https://www.betfair.it/exchange/plus/it/calcio-scommesse-1/market/${chosenCat.marketId}`,
+        directEventUrl: chosenCat.event?.id
+          ? `https://www.betfair.it/exchange/plus/it/calcio-scommesse-1/event/${chosenCat.event.id}`
+          : 'https://www.betfair.it/exchange/plus/inplay/football'
+      };
+
+      // Leggi anche il book live (listMarketBook) per ottenere la quota reale Punta/Banca
+      const bookRes = await callBetfairExchangeApi('listMarketBook', {
+        marketIds: [chosenCat.marketId],
+        priceProjection: { priceData: ['EX_BEST_OFFERS'] }
+      });
+      if (bookRes.ok && Array.isArray(bookRes.data) && bookRes.data[0]) {
+        const mBook = bookRes.data[0];
+        const rBook = (mBook.runners || []).find(rb => rb.selectionId === resolved.selectionId) || (mBook.runners || [])[0];
+        if (rBook) {
+          const back0 = rBook.ex?.availableToBack?.[0];
+          const lay0 = rBook.ex?.availableToLay?.[0];
+          if (back0) {
+            resolved.bestBackPrice = back0.price;
+            resolved.bestBackSize = back0.size;
+          }
+          if (lay0) {
+            resolved.bestLayPrice = lay0.price;
+            resolved.bestLaySize = lay0.size;
+          }
+        }
+      }
+
+      BETFAIR_MARKET_CACHE[cacheKey] = resolved;
+      return resolved;
+    }
+
+    function getConnectorMatchPool() {
+      const pool = [];
+      LIVE_MATCHES.forEach(m => {
+        pool.push({
+          key: `live:${m.id}`,
+          isLive: true,
+          matchId: m.id,
+          home: m.home,
+          away: m.away,
+          league: m.league,
+          minute: `${m.minute}'`,
+          score: `${m.scoreHome}-${m.scoreAway}`,
+          signals: (m.liveSignals && m.liveSignals.length > 0) ? m.liveSignals : []
+        });
+      });
+
+      const todayIso = getDynamicDateInfo().todayIso;
+      const todayPre = PREMATCH_GAMES.filter(g => inferGameIsoDate(g) === todayIso || g.status === 'PRE-MATCH').slice(0, 12);
+      todayPre.forEach(g => {
+        if (pool.some(p => teamNamesMatch(p.home, g.home) && teamNamesMatch(p.away, g.away))) return;
+        const simMatch = {
+          id: `sim-${g.id}`,
+          home: g.home,
+          away: g.away,
+          league: g.league,
+          minute: 34,
+          scoreHome: 0,
+          scoreAway: 0,
+          liveStats: {
+            xgHome: +(Number(g.xgStats?.projectedHomeGoals || 1.5) * 0.45).toFixed(2),
+            xgAway: +(Number(g.xgStats?.projectedAwayGoals || 1.1) * 0.45).toFixed(2),
+            appmHome: 1.05, appmAway: 0.78,
+            dangAttacksHome: 24, dangAttacksAway: 16,
+            shotsOnTargetHome: 3, shotsOnTargetAway: 2,
+            shotsInsideBoxHome: 5, shotsInsideBoxAway: 3,
+            bigChancesHome: 1, bigChancesAway: 1,
+            cornersHome: 4, cornersAway: 2
+          },
+          liveSignals: []
+        };
+        computeDynamicLiveSignals(simMatch);
+        pool.push({
+          key: `pre:${g.id}`,
+          isLive: g.status === 'LIVE',
+          matchId: g.id,
+          home: g.home,
+          away: g.away,
+          league: g.league,
+          minute: g.kickoff,
+          score: g.finalScore || '0-0',
+          signals: [
+            {
+              id: `pre-main-${g.id}`,
+              signalType: `PRONOSTICO PRE-MATCH (${g.mainPick.market})`,
+              selection: g.mainPick.selection,
+              fairOdd: g.mainPick.fairOdd,
+              minBetfairOdd: g.mainPick.bookieOdd,
+              minOperationalOdd: 1.50,
+              liveOdd: g.mainPick.bookieOdd
+            },
+            ...simMatch.liveSignals
+          ]
+        });
+      });
+      return pool;
+    }
+
+    function openBetfairLiveConnectorPanel(targetMatchId = null, targetSigId = null, autoResolve = false) {
+      saveBetfairLocalVault();
+      if (currentPage !== 'live') {
+        navigateToPage('live', null, true);
+      }
+      const panel = document.getElementById('betfair-live-connector-panel');
+      if (!panel) return;
+      panel.classList.remove('hidden');
+      updateBetfairVaultBadge();
+
+      const pool = getConnectorMatchPool();
+      const matchSel = document.getElementById('bf-conn-match-select');
+      if (!matchSel) return;
+
+      matchSel.innerHTML = pool.map(item => `
+        <option value="${item.key}">
+          ${item.isLive ? `🔴 LIVE ${item.minute} (${item.score})` : `📅 ${item.minute}`} • ${item.home} - ${item.away} (${item.league})
+        </option>
+      `).join('');
+
+      if (targetMatchId) {
+        const found = pool.find(p => p.matchId === targetMatchId || p.key === targetMatchId);
+        if (found) matchSel.value = found.key;
+      }
+
+      onChangeBetfairConnectorMatch(targetSigId);
+      panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+      if (autoResolve) {
+        triggerBetfairConnectorLookup();
+      }
+    }
+
+    function closeBetfairLiveConnectorPanel() {
+      const panel = document.getElementById('betfair-live-connector-panel');
+      if (panel) panel.classList.add('hidden');
+    }
+
+    function testAndConnectBetfairFromVault() {
+      saveBetfairLocalVault();
+      openBetfairLiveConnectorPanel(null, null, true);
+    }
+
+    function onChangeBetfairConnectorMatch(preferredSigId = null) {
+      const pool = getConnectorMatchPool();
+      const matchSel = document.getElementById('bf-conn-match-select');
+      const sigSel = document.getElementById('bf-conn-sig-select');
+      if (!matchSel || !sigSel) return;
+
+      const chosen = pool.find(p => p.key === matchSel.value) || pool[0];
+      if (!chosen) return;
+
+      sigSel.innerHTML = chosen.signals.map(s => `
+        <option value="${s.id}">🎯 ${s.selection} — [${s.signalType}] (Target ≥ @${Math.max(s.minBetfairOdd || 1.6, s.minOperationalOdd || 1.5).toFixed(2)})</option>
+      `).join('');
+
+      if (preferredSigId && chosen.signals.some(s => s.id === preferredSigId)) {
+        sigSel.value = preferredSigId;
+      }
+      _bfConnectorStatusMsg = '';
+      renderBetfairConnectorDetails();
+    }
+
+    function renderBetfairConnectorDetails() {
+      const box = document.getElementById('bf-conn-details-box');
+      const matchSel = document.getElementById('bf-conn-match-select');
+      const sigSel = document.getElementById('bf-conn-sig-select');
+      if (!box || !matchSel || !sigSel) return;
+
+      const pool = getConnectorMatchPool();
+      const chosenMatch = pool.find(p => p.key === matchSel.value) || pool[0];
+      if (!chosenMatch) return;
+      const chosenSig = chosenMatch.signals.find(s => s.id === sigSel.value) || chosenMatch.signals[0];
+      if (!chosenSig) return;
+
+      const cfg = getBetfairLocalConfig();
+      const spec = mapSelectionToBetfairSpec(chosenSig.selection, chosenMatch.home, chosenMatch.away);
+      const cacheKey = `${normalizeTeamName(chosenMatch.home)}|${normalizeTeamName(chosenMatch.away)}|${spec.marketTypeCode}|${spec.side}`;
+      const cached = BETFAIR_MARKET_CACHE[cacheKey] || null;
+
+      const effectiveOdd = cached?.bestBackPrice && spec.side === 'BACK'
+        ? cached.bestBackPrice
+        : cached?.bestLayPrice && spec.side === 'LAY'
+          ? cached.bestLayPrice
+          : (betfairCustomOdds[chosenSig.id] || chosenSig.liveOdd || chosenSig.minBetfairOdd || 1.75);
+      const evalBf = evaluateBetfairBackOdd(effectiveOdd, chosenSig.fairOdd || 1.55);
+      const stakeEuro = Math.max(10, evalBf.kelly.euro || 20);
+
+      const directTargetUrl = cached?.directMarketUrl || 'https://www.betfair.it/exchange/plus/inplay/football';
+
+      box.innerHTML = `
+        <div class="p-3 rounded-xl bg-[var(--card)] border border-[var(--border)] space-y-2.5">
+          <div class="grid grid-cols-1 md:grid-cols-4 gap-2 font-mono text-xs">
+            <div class="p-2 rounded bg-[var(--background)] border border-[var(--border)]">
+              <div class="text-[10px] text-[var(--muted-foreground)]">PARTITA &amp; QUERY API</div>
+              <div class="font-bold text-[var(--foreground)] truncate">${chosenMatch.home} - ${chosenMatch.away}</div>
+              <div class="text-[10px] text-[var(--primary)] truncate">EN: "${spec.enQuery}"</div>
+            </div>
+            <div class="p-2 rounded bg-[var(--background)] border border-[var(--border)]">
+              <div class="text-[10px] text-[var(--muted-foreground)]">CODICE MERCATO BETFAIR</div>
+              <div class="font-bold text-[var(--warning)]">${spec.marketTypeCode}</div>
+              <div class="text-[10px] text-[var(--muted-foreground)] truncate">${spec.marketLabelIt}</div>
+            </div>
+            <div class="p-2 rounded bg-[var(--background)] border border-[var(--border)]">
+              <div class="text-[10px] text-[var(--muted-foreground)]">SELEZIONE &amp; LATO</div>
+              <div class="font-bold text-[var(--success)] truncate">${spec.sideLabel}</div>
+              <div class="text-[10px] text-[var(--foreground)] truncate">${spec.runnerDisplay}</div>
+            </div>
+            <div class="p-2 rounded bg-[var(--primary)]/10 border border-[var(--primary)]/40">
+              <div class="text-[10px] text-[var(--primary)] font-bold">MARKET ID &amp; QUOTA</div>
+              <div class="font-bold text-[var(--foreground)]">${cached?.marketId ? `ID: ${cached.marketId}` : 'Da interrogare via API'}</div>
+              <div class="text-[10px] text-[var(--success)] font-bold">@${Number(effectiveOdd).toFixed(2)} • Stake €${stakeEuro}</div>
+            </div>
+          </div>
+
+          ${_bfConnectorStatusMsg ? `
+            <div class="p-2.5 rounded-lg border font-mono text-[11px] leading-relaxed ${
+              _bfConnectorStatusType === 'success'
+                ? 'bg-[var(--success)]/15 border-[var(--success)]/50 text-[var(--success)]'
+                : _bfConnectorStatusType === 'warning'
+                  ? 'bg-[var(--warning)]/15 border-[var(--warning)]/50 text-[var(--warning)]'
+                  : 'bg-[var(--secondary)] border-[var(--border)] text-[var(--foreground)]'
+            }">
+              ${_bfConnectorStatusMsg}
+            </div>
+          ` : ''}
+
+          <div class="flex flex-wrap items-center justify-between gap-2 pt-1">
+            <div class="flex flex-wrap items-center gap-2">
+              <button onclick="triggerBetfairConnectorLookup()" class="px-3 py-2 rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] font-bold text-xs hover:opacity-90 transition flex items-center gap-1.5">
+                <span>🔌 1. Cerca Market ID &amp; Quota via API Betfair</span>
+              </button>
+              <a href="${directTargetUrl}" target="_blank" rel="noopener noreferrer" onclick="copyBetfairSearchToClipboard('${chosenMatch.home.replace(/'/g, "\\'")} - ${chosenMatch.away.replace(/'/g, "\\'")}', '${spec.marketLabelIt.replace(/'/g, "\\'")}')" class="px-3 py-2 rounded-lg bg-[var(--warning)] text-black font-bold text-xs hover:opacity-90 transition inline-flex items-center gap-1.5 no-underline">
+                <span>🟡 2. ${cached?.marketId ? `Apri Mercato Diretto (${cached.marketId}) su Betfair.it` : 'Apri su Betfair.it (Copia Match & Mercato)'} ↗</span>
+              </a>
+              <button onclick="triggerBetfairPlaceOrder()" class="px-3 py-2 rounded-lg bg-[var(--success)] text-white font-bold text-xs hover:opacity-90 transition flex items-center gap-1.5">
+                <span>🚀 3. Invia Ordine API (${spec.side} @${Number(effectiveOdd).toFixed(2)} • €${stakeEuro})</span>
+              </button>
+            </div>
+            <button onclick="downloadLocalBetfairBridgeScript()" class="px-2.5 py-1.5 rounded-lg bg-[var(--secondary)] border border-[var(--border)] text-[11px] font-mono text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+              📥 Scarica Bridge Locale Anti-CORS (.py)
+            </button>
+          </div>
+        </div>
+      `;
+    }
+
+    function copyBetfairSearchToClipboard(matchText, marketText) {
+      try {
+        if (navigator.clipboard) {
+          navigator.clipboard.writeText(`${matchText} - ${marketText}`);
+        }
+      } catch (_) {}
+    }
+
+    async function triggerBetfairConnectorLookup() {
+      const pool = getConnectorMatchPool();
+      const matchSel = document.getElementById('bf-conn-match-select');
+      const sigSel = document.getElementById('bf-conn-sig-select');
+      if (!matchSel || !sigSel) return;
+      const chosenMatch = pool.find(p => p.key === matchSel.value) || pool[0];
+      const chosenSig = chosenMatch?.signals.find(s => s.id === sigSel.value) || chosenMatch?.signals[0];
+      if (!chosenMatch || !chosenSig) return;
+
+      const cfg = getBetfairLocalConfig();
+      if (!cfg.appKey || !cfg.ssoid) {
+        _bfConnectorStatusType = 'warning';
+        _bfConnectorStatusMsg = '⚠️ <b>Credenziali Betfair mancanti:</b> Apri il pannello <b>"🔐 Credenziali Betfair &amp; Telegram"</b> qui sopra, inserisci la tua <b>Betfair App Key</b> e il <b>Session Token (SSOID)</b> e premi <b>Salva Tutto Solo in Locale</b>.';
+        const vault = document.getElementById('betfair-vault-panel');
+        if (vault) vault.classList.remove('hidden');
+        renderBetfairConnectorDetails();
+        return;
+      }
+
+      _bfConnectorStatusType = 'info';
+      _bfConnectorStatusMsg = `⏳ Interrogazione API Betfair Exchange (<code>listMarketCatalogue</code>) in corso per <b>${chosenMatch.home} - ${chosenMatch.away}</b> → <b>${chosenSig.selection}</b>...`;
+      renderBetfairConnectorDetails();
+
+      const res = await resolveBetfairMarketForSignal(chosenMatch.home, chosenMatch.away, chosenSig.selection);
+      if (res.ok) {
+        const livePrice = res.spec.side === 'LAY' ? res.bestLayPrice : res.bestBackPrice;
+        if (livePrice && livePrice >= 1.02) {
+          betfairCustomOdds[chosenSig.id] = +Number(livePrice).toFixed(2);
+          saveUiState();
+          renderLiveAccordion();
+        }
+        _bfConnectorStatusType = 'success';
+        _bfConnectorStatusMsg = [
+          `✅ <b>MERCATO BETFAIR COLLEGATO CON SUCCESSO!</b>`,
+          `• Evento Betfair: <b>${res.eventName}</b> (Event ID: <code>${res.eventId}</code>)`,
+          `• Mercato Trovato: <b>${res.marketName}</b> (Market ID: <code>${res.marketId}</code>)`,
+          `• Selezione Runner: <b>${res.runnerName}</b> (Selection ID: <code>${res.selectionId}</code> • Lato: <b>${res.spec.sideLabel}</b>)`,
+          livePrice ? `• Quota Reale Live letta da Betfair: <b>@${Number(livePrice).toFixed(2)}</b> (aggiornata automaticamente nel Semaforo!)` : `• Mercato trovato, clicca il pulsante giallo qui sotto per aprirlo direttamente su Betfair.it!`
+        ].join('<br/>');
+      } else if (res.corsBlocked) {
+        _bfConnectorStatusType = 'warning';
+        _bfConnectorStatusMsg = [
+          `🛡️ <b>DIAGNOSTICA BROWSER (Blocco CORS su Header Betfair):</b>`,
+          `• Le tue credenziali (<b>App Key</b> + <b>SSOID Token</b>) sono salvate correttamente sul dispositivo.`,
+          `• Quando apri la Web App da <code>github.io</code>, il browser blocca per sicurezza gli header <code>X-Application</code> diretti verso <code>api.betfair.it</code> se non passi dal <b>Micro-Bridge Locale</b> (<code>http://127.0.0.1:8787</code>).`,
+          `• <b>Come fare subito:</b> Clicca su <b>"🟡 2. Apri su Betfair.it"</b> (abbiamo già tradotto per te il mercato esatto <code>${res.spec.marketTypeCode}</code> → <b>${res.spec.marketLabelIt}</b>, selezione <b>${res.spec.runnerDisplay}</b>) oppure scarica e avvia con 1 clic <b>📥 Bridge Locale Anti-CORS (.py)</b> per abilitare la lettura/invio ordini API diretto!`
+        ].join('<br/>');
+      } else {
+        _bfConnectorStatusType = 'warning';
+        _bfConnectorStatusMsg = `⚠️ <b>Risposta Betfair API:</b> ${res.error}`;
+      }
+      renderBetfairConnectorDetails();
+    }
+
+    async function triggerBetfairPlaceOrder() {
+      const pool = getConnectorMatchPool();
+      const matchSel = document.getElementById('bf-conn-match-select');
+      const sigSel = document.getElementById('bf-conn-sig-select');
+      if (!matchSel || !sigSel) return;
+      const chosenMatch = pool.find(p => p.key === matchSel.value) || pool[0];
+      const chosenSig = chosenMatch?.signals.find(s => s.id === sigSel.value) || chosenMatch?.signals[0];
+      if (!chosenMatch || !chosenSig) return;
+
+      const spec = mapSelectionToBetfairSpec(chosenSig.selection, chosenMatch.home, chosenMatch.away);
+      const cacheKey = `${normalizeTeamName(chosenMatch.home)}|${normalizeTeamName(chosenMatch.away)}|${spec.marketTypeCode}|${spec.side}`;
+      let cached = BETFAIR_MARKET_CACHE[cacheKey];
+
+      if (!cached || !cached.marketId) {
+        const res = await resolveBetfairMarketForSignal(chosenMatch.home, chosenMatch.away, chosenSig.selection);
+        if (!res.ok) {
+          _bfConnectorStatusType = 'warning';
+          _bfConnectorStatusMsg = `⚠️ Prima di inviare un ordine automatico tramite <code>placeOrders</code>, serve il <code>marketId</code> da Betfair API: ${res.error}`;
+          renderBetfairConnectorDetails();
+          return;
+        }
+        cached = res;
+      }
+
+      const effectiveOdd = betfairCustomOdds[chosenSig.id] || cached.bestBackPrice || chosenSig.liveOdd || chosenSig.minBetfairOdd || 1.75;
+      const evalBf = evaluateBetfairBackOdd(effectiveOdd, chosenSig.fairOdd || 1.55);
+      const stakeEuro = Math.max(2, evalBf.kelly.euro || 10);
+
+      const orderRes = await callBetfairExchangeApi('placeOrders', {
+        marketId: cached.marketId,
+        instructions: [
+          {
+            selectionId: cached.selectionId,
+            handicap: '0',
+            side: spec.side,
+            orderType: 'LIMIT',
+            limitOrder: {
+              size: String(stakeEuro),
+              price: String(Number(effectiveOdd).toFixed(2)),
+              persistenceType: 'LAPSE'
+            }
+          }
+        ]
+      });
+
+      if (orderRes.ok && orderRes.data?.status === 'SUCCESS') {
+        const rep = orderRes.data.instructionReports?.[0] || {};
+        _bfConnectorStatusType = 'success';
+        _bfConnectorStatusMsg = `✅ <b>ORDINE PIAZZATO SU BETFAIR EXCHANGE!</b> Bet ID: <code>${rep.betId || 'OK'}</code> • Mercato: <code>${cached.marketId}</code> • ${spec.sideLabel} <b>${cached.runnerName}</b> @<b>${Number(effectiveOdd).toFixed(2)}</b> (Stake €${stakeEuro}).`;
+      } else {
+        _bfConnectorStatusType = 'warning';
+        _bfConnectorStatusMsg = `⚠️ <b>Esito placeOrders:</b> ${orderRes.error || JSON.stringify(orderRes.data?.errorCode || 'Verifica saldo/mercato su Betfair.it')}`;
+      }
+      renderBetfairConnectorDetails();
+    }
+
+    function downloadLocalBetfairBridgeScript() {
+      const pyCode = [
+        '#!/usr/bin/env python3',
+        '"""APEX EDGE - Micro-Bridge Locale Betfair Exchange Anti-CORS (127.0.0.1:8787)"""',
+        'from http.server import HTTPServer, BaseHTTPRequestHandler',
+        'import urllib.request, urllib.error, json',
+        '',
+        'class BetfairBridge(BaseHTTPRequestHandler):',
+        '    def _cors(self):',
+        '        self.send_header("Access-Control-Allow-Origin", "*")',
+        '        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Application, X-Authentication, Accept")',
+        '        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")',
+        '    def do_OPTIONS(self):',
+        '        self.send_response(200); self._cors(); self.end_headers()',
+        '    def do_POST(self):',
+        '        method = self.path.strip("/").split("/")[-1]',
+        '        length = int(self.headers.get("Content-Length", 0))',
+        '        body = self.rfile.read(length)',
+        '        headers = {',
+        '            "X-Application": self.headers.get("X-Application", ""),',
+        '            "X-Authentication": self.headers.get("X-Authentication", ""),',
+        '            "Content-Type": "application/json",',
+        '            "Accept": "application/json"',
+        '        }',
+        '        url = f"https://api.betfair.it/exchange/betting/rest/v1.0/{method}/"',
+        '        req = urllib.request.Request(url, data=body, headers=headers, method="POST")',
+        '        try:',
+        '            with urllib.request.urlopen(req, timeout=10) as resp:',
+        '                data = resp.read()',
+        '                self.send_response(200); self._cors()',
+        '                self.send_header("Content-Type", "application/json"); self.end_headers()',
+        '                self.wfile.write(data)',
+        '        except urllib.error.HTTPError as e:',
+        '            self.send_response(e.code); self._cors()',
+        '            self.send_header("Content-Type", "application/json"); self.end_headers()',
+        '            self.wfile.write(e.read())',
+        '',
+        'if __name__ == "__main__":',
+        '    print("🟢 APEX EDGE Betfair Local Bridge attivo su http://127.0.0.1:8787")',
+        '    HTTPServer(("127.0.0.1", 8787), BetfairBridge).serve_forever()'
+      ].join('\n');
+
+      const blob = new Blob([pyCode], { type: 'text/x-python' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'betfair_local_bridge.py';
+      a.click();
     }
 
     async function sendTelegramMessage(htmlText, overrideCfg = null) {
@@ -1974,19 +2769,34 @@
       snap._tgSending = true;
       const matchId = m?.id || String(snap.id || '').replace(/^snap-/, '');
       const apexLiveUrl = `https://salvo061978.github.io/apex-edge-betting/#live=${encodeURIComponent(matchId)}`;
-      const betfairUrl = 'https://www.betfair.it/exchange/plus/inplay/football';
+
+      // Se l'utente ha configurato App Key + SSOID Betfair, prova a risolvere il Market ID specifico
+      let betfairUrl = 'https://www.betfair.it/exchange/plus/inplay/football';
+      let betfairLinkLabel = 'Apri Calcio Live su Betfair Exchange';
+      const bfCfg = getBetfairLocalConfig();
+      const bfSpec = mapSelectionToBetfairSpec(snap.selection, m?.home || '', m?.away || '');
+      if (bfCfg.configured && m?.home && m?.away) {
+        try {
+          const bfRes = await resolveBetfairMarketForSignal(m.home, m.away, snap.selection);
+          if (bfRes && bfRes.ok && bfRes.directMarketUrl) {
+            betfairUrl = bfRes.directMarketUrl;
+            betfairLinkLabel = `Apri Mercato Diretto Betfair (${bfRes.marketName} • ${bfSpec.sideLabel})`;
+          }
+        } catch (_) {}
+      }
+
       const msg = [
         `🟢🔥 <b>ENTRA ORA • SEMAFORO VERDE (${snap.triggerScore}/100)</b>`,
         `⚽ <b>${snap.match}</b> (${snap.league})`,
         `⏱️ Minuto: <b>${snap.triggerMinute}</b> • Risultato: <b>${snap.scoreAtTrigger}</b>`,
         '',
-        `🎯 Mercato: <b>${snap.selection}</b>`,
+        `🎯 Mercato: <b>${snap.selection}</b> (<code>${bfSpec.marketTypeCode}</code> • ${bfSpec.sideLabel})`,
         `📊 Quota Fair: <b>@${Number(snap.fairOddAtTrigger).toFixed(2)}</b> • Min Betfair: <b>@${Number(snap.minBetfairOdd).toFixed(2)}</b>`,
         `📈 Telemetria: ${snap.statsAtTrigger}`,
         `🔗 Pre-Match: ${snap.preMatchConvergence}`,
         '',
         `📲 <a href="${apexLiveUrl}">Apri Partita Live su APEX EDGE</a>`,
-        `🟡 <a href="${betfairUrl}">Apri Calcio Live su Betfair Exchange</a>`
+        `🟡 <a href="${betfairUrl}">${betfairLinkLabel}</a>`
       ].join('\n');
       const res = await sendTelegramMessage(msg, cfg);
       snap._tgSending = false;
@@ -4450,7 +5260,8 @@
       if (!container) return;
 
       if (LIVE_MATCHES.length === 0) {
-        const upcomingNext = PREMATCH_GAMES.filter(g => g.day === 'VEN_DOM_13_15').slice(0, 6);
+        const info = getDynamicDateInfo();
+        const upcomingNext = PREMATCH_GAMES.filter(g => inferGameIsoDate(g) === info.todayIso || g.status === 'PRE-MATCH').slice(0, 6);
         container.innerHTML = `
           <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-3">
             <div class="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] pb-2.5">
@@ -4458,30 +5269,40 @@
                 <div class="inline-flex items-center gap-2 px-2.5 py-0.5 rounded bg-[var(--secondary)] text-[var(--foreground)] font-mono text-xs font-bold">
                   <span>📡 STATO FEED REALE: 0 PARTITE IN CORSO IN QUESTO MINUTO</span>
                 </div>
-                <h3 class="text-sm font-bold m-0 pt-1">Tutte le partite di Oggi Giovedì 12/11 sono terminate (Scorri subito sotto per lo Storico Segnali Live verificati!)</h3>
+                <h3 class="text-sm font-bold m-0 pt-1">Nessun match attivo in questo istante • Collega in anticipo i pronostici di Oggi (${info.todayLabel}) su Betfair!</h3>
                 <p class="text-xs text-[var(--muted-foreground)] m-0">
-                  Quando le partite sono in corso, ciascuna mostra il suo <strong>Semaforo d'Ingresso (🟢🔥 Entra Ora / 🟡 Prepara / ⚪ No-Bet)</strong> calcolato incrociando il pronostico Pre-Match con i dati live. Ogni segnale verde viene congelato automaticamente nella tabella qui sotto!
+                  Puoi testare e collegare fin da subito una partita e un pronostico specifico alla tua <strong>Betfair App Key + SSOID Token</strong> cliccando su <strong>"🎯 Collega su Betfair"</strong> qui sotto.
                 </p>
               </div>
-              <button onclick="navigateToPage('palinsesto')" class="px-3 py-1.5 rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] text-xs font-bold">
-                📅 Vedi Esiti Pre-Match 12/11 →
-              </button>
+              <div class="flex flex-wrap items-center gap-1.5">
+                <button onclick="openBetfairLiveConnectorPanel(null, null, true)" class="px-3 py-1.5 rounded-lg bg-[var(--success)] text-white text-xs font-bold">
+                  🎯 Apri Ponte Diretto Betfair API
+                </button>
+                <button onclick="navigateToPage('palinsesto')" class="px-3 py-1.5 rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] text-xs font-bold">
+                  📅 Vedi Palinsesto Oggi →
+                </button>
+              </div>
             </div>
 
             <div class="space-y-1.5">
               <div class="text-xs font-bold uppercase tracking-wider text-[var(--primary)]">
-                ⏰ Prossime Partite che verranno monitorate dal Semaforo Live (Ven 13 – Dom 15 Novembre):
+                ⏰ Partite di Oggi &amp; Prossimi Big Match collegabili direttamente a Betfair Exchange:
               </div>
               <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
                 ${upcomingNext.map(g => `
-                  <div class="p-2 rounded-lg bg-[var(--background)] border border-[var(--border)] flex items-center justify-between gap-2 text-xs">
+                  <div class="p-2.5 rounded-lg bg-[var(--background)] border border-[var(--border)] flex flex-col justify-between gap-2 text-xs">
                     <div class="min-w-0">
                       <div class="font-bold text-[var(--foreground)] truncate">${g.countryFlag} ${g.home} - ${g.away}</div>
-                      <div class="text-[var(--muted-foreground)] font-mono text-[11px]">${g.kickoff} • Target Pre-Match: ${g.mainPick.selection}</div>
+                      <div class="text-[var(--muted-foreground)] font-mono text-[11px] truncate">${g.kickoff} • 🎯 ${g.mainPick.selection}</div>
                     </div>
-                    <button onclick="openMatchDetailPage('${g.id}')" class="shrink-0 px-2 py-1 rounded bg-[var(--secondary)] text-[var(--secondary-foreground)] font-semibold hover:bg-[var(--primary)] hover:text-[var(--primary-foreground)] transition">
-                      Analisi →
-                    </button>
+                    <div class="flex items-center gap-1.5 pt-1">
+                      <button onclick="openBetfairLiveConnectorPanel('pre:${g.id}', null, true)" class="flex-1 px-2 py-1 rounded bg-[var(--warning)]/20 text-[var(--warning)] border border-[var(--warning)]/50 font-bold hover:bg-[var(--warning)] hover:text-black transition">
+                        🎯 Collega su Betfair
+                      </button>
+                      <button onclick="openMatchDetailPage('${g.id}')" class="px-2 py-1 rounded bg-[var(--secondary)] text-[var(--secondary-foreground)] font-semibold hover:bg-[var(--primary)] hover:text-[var(--primary-foreground)] transition">
+                        Analisi →
+                      </button>
+                    </div>
                   </div>
                 `).join('')}
               </div>
@@ -4599,6 +5420,9 @@
                       const meetsFloor = userBfOdd >= floorOdd;
                       const isValueOnBetfair = userBfOdd >= effectiveMinOdd && sem.status === 'ENTER_NOW';
                       const inSlip = betSlip.some(i => i.id === sig.id);
+                      const bfSpec = mapSelectionToBetfairSpec(sig.selection, m.home, m.away);
+                      const bfCacheKey = `${normalizeTeamName(m.home)}|${normalizeTeamName(m.away)}|${bfSpec.marketTypeCode}|${bfSpec.side}`;
+                      const cachedBf = BETFAIR_MARKET_CACHE[bfCacheKey] || null;
 
                       return `
                         <div class="bg-[var(--card)] border-2 ${isValueOnBetfair ? 'border-[var(--success)]' : sem.status === 'PREPARE' ? 'border-[var(--warning)]' : 'border-[var(--border)]'} rounded-xl p-3 space-y-2.5">
@@ -4607,7 +5431,12 @@
                             <span class="font-mono font-bold text-[11px] ${sem.status === 'ENTER_NOW' ? 'text-[var(--success)]' : sem.status === 'PREPARE' ? 'text-[var(--warning)]' : 'text-[var(--muted-foreground)]'}">${sig.urgency}</span>
                           </div>
 
-                          <div class="text-sm font-bold text-[var(--foreground)]">🎯 ${sig.selection}</div>
+                          <div class="flex flex-wrap items-center justify-between gap-1.5">
+                            <div class="text-sm font-bold text-[var(--foreground)]">🎯 ${sig.selection}</div>
+                            <span class="px-2 py-0.5 rounded bg-[var(--warning)]/15 border border-[var(--warning)]/40 text-[var(--warning)] font-mono text-[10px] font-bold">
+                              Betfair: ${bfSpec.marketTypeCode} • ${bfSpec.sideLabel}${cachedBf?.marketId ? ` (${cachedBf.marketId})` : ''}
+                            </span>
+                          </div>
 
                           <div class="grid grid-cols-3 gap-2 text-center font-mono text-xs">
                             <div class="p-2 rounded bg-[var(--background)] border border-[var(--border)]">
@@ -4626,7 +5455,7 @@
 
                           <div class="p-2.5 rounded-lg bg-[var(--background)] border border-[var(--border)] space-y-2">
                             <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
-                              <span class="font-bold text-[var(--warning)]">📲 Quota Betfair (Punta):</span>
+                              <span class="font-bold text-[var(--warning)]">📲 Quota Betfair (${bfSpec.sideLabel}):</span>
                               <div class="flex items-center gap-1 font-mono">
                                 <button onclick="updateBetfairCustomOdd('${sig.id}', -0.05, false)" class="px-2 py-1 rounded bg-[var(--secondary)] hover:bg-[var(--primary)] hover:text-[var(--primary-foreground)] font-bold">-0.05</button>
                                 <input type="number" step="0.02" min="1.02" max="50" value="${userBfOdd.toFixed(2)}" onchange="updateBetfairCustomOdd('${sig.id}', this.value, true)" class="w-16 text-center bg-[var(--card)] border border-[var(--primary)] rounded py-1 font-bold text-xs text-[var(--foreground)]" />
@@ -4648,9 +5477,14 @@
                             </div>
                           </div>
 
-                          <button onclick="toggleSlipItem('${sig.id}', '${m.home} - ${m.away} (LIVE ${m.minute}\\')', '${sig.selection}', ${userBfOdd}, ${evalBf.probPct}, ${Math.max(0, evalBf.netEvPct)}, true)" class="w-full py-2 rounded-lg text-xs font-bold transition ${inSlip ? 'bg-[var(--success)] text-white' : 'bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90'}">
-                            ${inSlip ? '✓ In Schedina' : `⚡ Metti in Schedina @${userBfOdd.toFixed(2)}`}
-                          </button>
+                          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <button onclick="openBetfairLiveConnectorPanel('live:${m.id}', '${sig.id}', true)" class="w-full py-2 px-2.5 rounded-lg text-xs font-bold bg-[var(--warning)] text-black hover:opacity-90 transition flex items-center justify-center gap-1">
+                              <span>🎯 Collega / Apri su Betfair</span>
+                            </button>
+                            <button onclick="toggleSlipItem('${sig.id}', '${m.home} - ${m.away} (LIVE ${m.minute}\\')', '${sig.selection}', ${userBfOdd}, ${evalBf.probPct}, ${Math.max(0, evalBf.netEvPct)}, true)" class="w-full py-2 px-2.5 rounded-lg text-xs font-bold transition ${inSlip ? 'bg-[var(--success)] text-white' : 'bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90'}">
+                              ${inSlip ? '✓ In Schedina' : `⚡ Metti in Schedina @${userBfOdd.toFixed(2)}`}
+                            </button>
+                          </div>
                         </div>
                       `;
                     }).join('')}

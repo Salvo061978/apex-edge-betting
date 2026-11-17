@@ -2055,7 +2055,7 @@
       const enAway = normalizeTeamName(cleanAway) || cleanAway;
 
       // 1) Over/Under 1° Tempo (First Half Goals)
-      if (primary.includes('1°t') || primary.includes('1t') || primary.includes('primo tempo') || raw.toLowerCase().includes('1°t')) {
+      if (primary.includes('1°t') || primary.includes('1t') || primary.includes('1° tempo') || primary.includes('1 tempo') || primary.includes('primo tempo') || raw.toLowerCase().includes('1°t') || raw.toLowerCase().includes('1° tempo')) {
         const mLine = primary.match(/(over|under)\s*(\d+(?:\.\d+)?)/);
         const isUnder = mLine ? mLine[1] === 'under' : false;
         const lineStr = mLine ? mLine[2] : '0.5';
@@ -2098,7 +2098,7 @@
         const targetTeamEn = isAway ? enAway : enHome;
         return {
           marketTypeCode: 'DRAW_NO_BET',
-          fallbackMarketTypeCodes: ['DRAW_NO_BET'],
+          fallbackMarketTypeCodes: ['DRAW_NO_BET', 'MATCH_ODDS'],
           marketLabelIt: `Draw No Bet / Rimborso Pareggio (${targetTeamIt})`,
           runnerDisplay: `${targetTeamIt} (${targetTeamEn})`,
           runnerCandidates: [normalizeTeamName(targetTeamIt), normalizeTeamName(targetTeamEn), targetTeamIt.toLowerCase(), targetTeamEn.toLowerCase()],
@@ -2254,16 +2254,37 @@
     /**
      * Richiesta GET pura tramite proxy multipli (ZERO header custom = ZERO preflight OPTIONS bloccati da CORS su smartphone Android/iOS).
      */
+    async function fetchWithTimeout(url, ms = 4500) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), ms);
+      try {
+        return await fetch(url, { signal: ctrl.signal });
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
     async function fetchViaGetProxy(targetUrl) {
+      // Per gli endpoint JSON pubblici di Betfair (ero.betfair.it / ips.betfair.it), prova prima il fetch diretto!
+      if (/^https:\/\/(ero|ips)\.betfair\.(it|com)\//i.test(targetUrl)) {
+        try {
+          const directRes = await fetchWithTimeout(targetUrl, 3800);
+          if (directRes.ok) {
+            const directTxt = await directRes.text();
+            if (directTxt && directTxt.length > 5) return directTxt;
+          }
+        } catch (_) {}
+      }
+
       const candidates = [
+        { url: `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`, unwrapJson: false },
         { url: `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, unwrapJson: false },
         { url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`, unwrapJson: false },
-        { url: `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`, unwrapJson: true },
-        { url: `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`, unwrapJson: false }
+        { url: `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`, unwrapJson: true }
       ];
       for (const c of candidates) {
         try {
-          const res = await fetch(c.url);
+          const res = await fetchWithTimeout(c.url, 4800);
           if (!res.ok) continue;
           if (c.unwrapJson) {
             const j = await res.json();
@@ -2367,8 +2388,44 @@
         }
       };
 
-      // 1) Se non abbiamo aggiornato le In-Play negli ultimi 15 secondi, scarica le pagine In-Play e Calcio di Betfair.it
+      // 1) Fonte primaria JSON ufficiale Betfair In-Play Service (restituisce TUTTI gli eventId e marketId live!)
       if (now - _lastEroDiscoveryTs > 15000 || _ERO_DISCOVERED_EVENTS.length === 0) {
+        const ipsUrls = [
+          'https://ips.betfair.it/inplayservice/v1/eventsInPlay?_ak=nzIFcwyWhrlwYMrh&alt=json&eventTypeIds=1&locale=it&regionCode=ITA',
+          'https://ips.betfair.com/inplayservice/v1/eventsInPlay?_ak=nzIFcwyWhrlwYMrh&alt=json&eventTypeIds=1&locale=it'
+        ];
+        for (const ipsUrl of ipsUrls) {
+          try {
+            const ipsTxt = await fetchViaGetProxy(ipsUrl);
+            if (!ipsTxt) continue;
+            const ipsData = JSON.parse(ipsTxt);
+            const evList = Array.isArray(ipsData) ? ipsData : (ipsData?.events || ipsData?.eventTypes?.[0]?.eventNodes || []);
+            if (Array.isArray(evList) && evList.length > 0) {
+              for (const item of evList) {
+                const eid = String(item.eventId || item.id || '');
+                const ename = String(item.eventName || item.name || (item.homeName && item.awayName ? `${item.homeName} - ${item.awayName}` : '') || '').trim();
+                if (/^\d{6,10}$/.test(eid)) {
+                  eventIdsFound.add(eid);
+                  if (ename && !_ERO_DISCOVERED_EVENTS.some(x => x.eventId === eid)) {
+                    _ERO_DISCOVERED_EVENTS.push({ eventId: eid, eventName: ename, openDate: item.startTime || '', markets: [] });
+                  }
+                }
+                if (Array.isArray(item.marketIds)) {
+                  item.marketIds.forEach(mid => { if (/^1\.\d{6,12}$/.test(String(mid))) marketIdsFound.add(String(mid)); });
+                }
+                if (item.marketId && /^1\.\d{6,12}$/.test(String(item.marketId))) {
+                  marketIdsFound.add(String(item.marketId));
+                }
+              }
+              _lastEroDiscoveryTs = now;
+              break;
+            }
+          } catch (_) {}
+        }
+      }
+
+      // 2) Se IPS non ha restituito eventi, prova le pagine HTML In-Play e Calcio di Betfair.it
+      if (eventIdsFound.size === 0 && marketIdsFound.size === 0 && (now - _lastEroDiscoveryTs > 15000 || _ERO_DISCOVERED_EVENTS.length === 0)) {
         const inPlayPages = [
           'https://www.betfair.it/exchange/plus/inplay/football',
           'https://www.betfair.it/exchange/plus/it/calcio-scommesse-1'
@@ -2379,8 +2436,8 @@
         }
       }
 
-      // 2) Se cerchiamo una partita specifica, interroga anche la ricerca per nome squadra in Italiano e Inglese
-      if (homeTeam || awayTeam) {
+      // 3) Se cerchiamo una partita specifica non trovata negli eventi IPS, prova ricerca testuale
+      if (homeTeam && awayTeam && !_ERO_DISCOVERED_EVENTS.some(ev => verifyBetfairEventMatchesTeams(ev.eventName, homeTeam, awayTeam))) {
         const itHome = getItalianTeamVariant(homeTeam);
         const itAway = getItalianTeamVariant(awayTeam);
         const enHome = normalizeTeamName(homeTeam);
@@ -2536,11 +2593,15 @@
       return Boolean(homeTeam && awayTeam && teamNamesMatch(evName, homeTeam) && teamNamesMatch(evName, awayTeam));
     }
 
-    function buildBetfairMarketUrl(marketId) {
+    function buildBetfairMarketUrl(marketId, eventId = '', homeTeam = '', awayTeam = '') {
       const cleanId = String(marketId || '').trim();
       const m = cleanId.match(/(1\.\d{6,12})/);
       if (m) return `https://www.betfair.it/exchange/plus/football/market/${m[1]}`;
       if (cleanId.startsWith('http')) return cleanId;
+      const cleanEv = String(eventId || '').trim();
+      if (/^\d{6,10}$/.test(cleanEv)) return `https://www.betfair.it/exchange/plus/football/event/${cleanEv}`;
+      const q = `${homeTeam || ''} ${awayTeam || ''}`.trim();
+      if (q) return `https://www.betfair.it/exchange/plus/search?query=${encodeURIComponent(q)}`;
       return `https://www.betfair.it/exchange/plus/inplay/football`;
     }
 
@@ -3623,7 +3684,7 @@
 
       const finalMktId = cached?.marketId || '';
       const directApexUrl = `https://salvo061978.github.io/apex-edge-betting/#live=${encodeURIComponent(chosenMatch.matchId)}&sig=${encodeURIComponent(chosenSig.id)}`;
-      const directBetfairUrl = finalMktId ? buildBetfairMarketUrl(finalMktId) : `https://www.betfair.it/exchange/plus/inplay/football`;
+      const directBetfairUrl = buildBetfairMarketUrl(finalMktId, cached?.eventId || '', effectiveHome, effectiveAway);
       const displayMatchTitle = cached?.eventName ? `${cached.eventName}` : `${effectiveHome} - ${effectiveAway}`;
       const plainSelection = formatLiveSelectionPlainIt(chosenSig.selection, effectiveHome, effectiveAway);
 
@@ -5942,13 +6003,13 @@
         });
 
         // Strategia 3: LAY THE DRAW (Banca il Pareggio) con Cash-Out al gol
-        if (min >= 50 && min <= 78 && m.scoreHome === m.scoreAway && domShare >= 0.60) {
-          const probBreakDraw = Math.min(0.74, Math.max(0.32, probNextGoal * 0.92));
+        if (min >= 45 && min <= 80 && m.scoreHome === m.scoreAway && domShare >= 0.56) {
+          const probBreakDraw = Math.min(0.74, Math.max(0.32, probNextGoal * 0.94));
           const fairLtd = +(1 / probBreakDraw).toFixed(2);
           const minBfLtd = calcMinBetfairBackOdd(fairLtd, 0.05);
           const sigLtdId = `sig-ltd-${m.id}`;
           const selLtdText = `Banca Pareggio (${m.scoreHome}-${m.scoreAway}) + Cash-Out al gol`;
-          const realisticMktOddLtd = +(Math.max(1.30, realisticMktOddOver * 1.15)).toFixed(2);
+          const realisticMktOddLtd = +(Math.max(1.30, realisticMktOddOver * 1.18)).toFixed(2);
           const actualLiveOddLtd = getLiveSignalOdd(sigLtdId, selLtdText, realisticMktOddLtd);
           const reqMinLtd = +(Math.max(minBfLtd, LIVE_MIN_OPERATIONAL_ODD)).toFixed(2);
           signals.push({
@@ -5960,7 +6021,7 @@
             minBetfairOdd: minBfLtd,
             minOperationalOdd: LIVE_MIN_OPERATIONAL_ODD,
             liveOdd: actualLiveOddLtd,
-            confidence: 8.8,
+            confidence: 8.9,
             triggerReason: `Parità al ${min}' ma ${domTeam} domina al ${Math.round(domShare * 100)}%: al primo gol fai green-up immediato su Betfair.`,
             urgency: actualLiveOddLtd >= reqMinLtd && semaphore.score >= 65 ? '🟢⚡ LTD CONSIGLIATO' : '🟡 PREPARA LTD'
           });
@@ -5975,7 +6036,8 @@
         if (minBfUnder >= LIVE_MIN_OPERATIONAL_ODD) {
           const sigUnderId = `sig-under-${m.id}`;
           const selUnderText = `Under ${overLine} Gol (Nessun altro gol fino al 90')`;
-          const actualLiveOddUnder = getLiveSignalOdd(sigUnderId, selUnderText, minBfUnder);
+          const realisticMktOddUnder = +(Math.max(minBfUnder, +(fairUnder * 1.08).toFixed(2))).toFixed(2);
+          const actualLiveOddUnder = getLiveSignalOdd(sigUnderId, selUnderText, realisticMktOddUnder);
           signals.push({
             id: sigUnderId,
             signalType: `GESTIONE RITMO • UNDER ${overLine} GOL`,
@@ -5985,7 +6047,7 @@
             minBetfairOdd: minBfUnder,
             minOperationalOdd: LIVE_MIN_OPERATIONAL_ODD,
             liveOdd: actualLiveOddUnder,
-            confidence: 8.3,
+            confidence: 8.4,
             triggerReason: `Ritmo in calo al ${min}' (xG ultimi 15': ${totalLast15Xg.toFixed(2)}, scarto gol: ${Math.abs(m.scoreHome - m.scoreAway)}): decadimento temporale favorevole all'Under.`,
             urgency: actualLiveOddUnder >= minBfUnder ? '🟢🔥 VALUTA UNDER TATTICO' : '🟡 VALUTA UNDER TATTICO'
           });
@@ -6001,7 +6063,7 @@
         const minBfGg = calcMinBetfairBackOdd(fairGg, 0.05);
         const sigGgId = `sig-gg-${m.id}`;
         const selGgText = 'Entrambe Segnano Goal (GG Live)';
-        const realisticMktOddGg = +(Math.max(1.30, fairGg * 0.96)).toFixed(2);
+        const realisticMktOddGg = +(Math.max(1.35, minBfGg * 1.04)).toFixed(2);
         const actualLiveOddGg = getLiveSignalOdd(sigGgId, selGgText, realisticMktOddGg);
         const reqMinGg = +(Math.max(minBfGg, LIVE_MIN_OPERATIONAL_ODD)).toFixed(2);
         signals.push({
@@ -6013,7 +6075,7 @@
           minBetfairOdd: minBfGg,
           minOperationalOdd: LIVE_MIN_OPERATIONAL_ODD,
           liveOdd: actualLiveOddGg,
-          confidence: 8.5,
+          confidence: 8.6,
           triggerReason: `Entrambe pericolose al ${min}' (xG ${s.xgHome.toFixed(2)}-${s.xgAway.toFixed(2)}, Tiri Porta ${s.shotsOnTargetHome}-${s.shotsOnTargetAway}): prob. GG ${(probGg * 100).toFixed(0)}%.`,
           urgency: actualLiveOddGg >= reqMinGg && semaphore.score >= 65 ? '🟢🔥 GG CONSIGLIATO' : `🟡 QUOTA GG @${actualLiveOddGg.toFixed(2)} (MIN ≥ @${reqMinGg.toFixed(2)})`
         });
@@ -6035,7 +6097,6 @@
           return (b.sg.confidence || 0) - (a.sg.confidence || 0);
         });
         primarySig = validEntries[0].sg;
-        // Porta in prima posizione il segnale migliore così UI e Telegram mostrano la scommessa più profittevole
         const pIdx = signals.indexOf(primarySig);
         if (pIdx > 0) {
           signals.splice(pIdx, 1);
@@ -6044,7 +6105,6 @@
       }
 
       // GATEKEEPER SEMAFORO SULLA QUOTA REALE BETFAIR DEL SEGNALE PRINCIPALE:
-      // Se nessun segnale supera la Quota Minima Richiesta, il Semaforo NON può essere VERDE (ENTRA ORA) e la notifica Telegram viene bloccata!
       if (primarySig) {
         const gkPrimary = evaluateLiveOddGatekeeper(primarySig.liveOdd, primarySig);
         if (!gkPrimary.isOddValid && semaphore.status === 'ENTER_NOW') {
@@ -6056,9 +6116,21 @@
       }
 
       m.liveSignals = signals;
-      // Solo se il Semaforo è rimasto VERDE (ENTRA ORA) E la quota su Betfair supera il Gatekeeper (>= 1.50/1.60 e >= minBetfairOdd), congela e invia su Telegram!
       if (!m._isPreviewOnly && primarySig) {
-        recordLiveSignalSnapshot(m, primarySig, semaphore, preMatchInfo);
+        const isUnderPrimary = String(primarySig.id || '').startsWith('sig-under-');
+        if (semaphore.status === 'ENTER_NOW') {
+          recordLiveSignalSnapshot(m, primarySig, semaphore, preMatchInfo);
+          // Se esiste anche un segnale secondario di strategia diversa (es. LTD / DNB / GG) valido, registralo una sola volta per quella strategia
+          for (const entry of validEntries) {
+            if (entry.sg.id !== primarySig.id && getLiveSignalKind(entry.sg.id) !== 'over') {
+              recordLiveSignalSnapshot(m, entry.sg, semaphore, preMatchInfo);
+              break;
+            }
+          }
+        } else if (isUnderPrimary && evaluateLiveOddGatekeeper(primarySig.liveOdd, primarySig).isOddValid) {
+          // Under Tattico richiede ritmo basso (opposto al semaforo offensivo): abilita snapshot indipendente
+          recordLiveSignalSnapshot(m, primarySig, { ...semaphore, status: 'ENTER_NOW' }, preMatchInfo);
+        }
       }
       return signals;
     }

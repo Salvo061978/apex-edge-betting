@@ -1702,6 +1702,7 @@
     // =========================================================================
     const UI_STATE_STORAGE_KEY = 'apex_edge_ui_state_v3';
     const LIVE_HISTORY_STORAGE_KEY = 'apex_edge_live_signals_v1';
+    const PREMATCH_ARCHIVE_STORAGE_KEY = 'apex_edge_prematch_archive_v1';
     const BETFAIR_LOCAL_VAULT_KEY = 'apex_betfair_local_vault_only';
     const TELEGRAM_LOCAL_VAULT_KEY = 'apex_telegram_local_vault_only';
     let currentPage = 'palinsesto';
@@ -1758,6 +1759,10 @@
         };
         localStorage.setItem(UI_STATE_STORAGE_KEY, JSON.stringify(stateObj));
         localStorage.setItem(LIVE_HISTORY_STORAGE_KEY, JSON.stringify(LIVE_SIGNALS_HISTORY));
+        const gradedPrematch = PREMATCH_GAMES.filter(g =>
+          g.status === 'FT' || g.outcome === 'WON' || g.outcome === 'LOST' || g.outcome === 'VOID'
+        ).slice(-120);
+        localStorage.setItem(PREMATCH_ARCHIVE_STORAGE_KEY, JSON.stringify(gradedPrematch));
       } catch (_) {}
     }
 
@@ -1774,6 +1779,26 @@
               if (!mapById.has(item.id)) mapById.set(item.id, item);
             });
             LIVE_SIGNALS_HISTORY = Array.from(mapById.values());
+          }
+        }
+      } catch (_) {}
+
+      try {
+        const rawPm = localStorage.getItem(PREMATCH_ARCHIVE_STORAGE_KEY);
+        if (rawPm) {
+          const parsedPm = JSON.parse(rawPm);
+          if (Array.isArray(parsedPm) && parsedPm.length > 0) {
+            for (const archived of parsedPm) {
+              if (!archived || !archived.id) continue;
+              const existingIdx = PREMATCH_GAMES.findIndex(g => g.id === archived.id);
+              if (existingIdx >= 0) {
+                if (PREMATCH_GAMES[existingIdx].status !== 'FT' && archived.status === 'FT') {
+                  PREMATCH_GAMES[existingIdx] = archived;
+                }
+              } else {
+                PREMATCH_GAMES.push(archived);
+              }
+            }
           }
         }
       } catch (_) {}
@@ -4828,6 +4853,114 @@
       };
     }
 
+    /**
+     * Motore di Auto-Calibrazione Adattiva (Live + Prono Pre-Match) con Paletti Anti-Overfitting:
+     * 1) Esclude le sconfitte da "Varianza / Bad Beat xG" dal correttivo negativo.
+     * 2) Applica Shrinkage Bayesiano: w = N / (N + 20).
+     * 3) Sotto la soglia minima (N < 15): correttivo morbido limitato a ±2.5%.
+     * 4) Sopra la soglia (N >= 15): correttivo attivo ma clampato rigorosamente a ±8.0% ([0.92, 1.08]).
+     */
+    function computeAdaptiveModelCalibration() {
+      const shrinkBucket = (wins, losses, expectedSum) => {
+        const n = wins + losses;
+        if (n === 0) {
+          return { n: 0, wins: 0, losses: 0, mult: 1.0, deltaPct: 0, scoreAdj: 0, guardrailStatus: 'NEUTRO (0/15)' };
+        }
+        const avgExp = expectedSum / n;
+        const obsRate = wins / n;
+        const diff = obsRate - avgExp;
+        const weight = n / (n + 20);
+        const rawDelta = diff * weight;
+        const maxCap = n < 15 ? 0.025 : 0.08;
+        const clampedDelta = Math.max(-maxCap, Math.min(maxCap, rawDelta));
+        const mult = +(1 + clampedDelta).toFixed(4);
+        const scoreAdj = Math.max(-3, Math.min(3, Math.round(clampedDelta * 40)));
+        const guardrailStatus = n < 15
+          ? `OSSERVAZIONE (${n}/15 · Cap ±2.5%)`
+          : `ATTIVO (${n}≥15 · Cap ±8.0%)`;
+        return {
+          n, wins, losses,
+          obsRatePct: +(obsRate * 100).toFixed(1),
+          expRatePct: +(avgExp * 100).toFixed(1),
+          mult,
+          deltaPct: +(clampedDelta * 100).toFixed(2),
+          scoreAdj,
+          guardrailStatus
+        };
+      };
+
+      // A) Pronostici Pre-Match ("Prono")
+      const pmCatStats = {
+        AH_COMBO: { wins: 0, losses: 0, exp: 0, badBeats: 0 },
+        OVER_UNDER: { wins: 0, losses: 0, exp: 0, badBeats: 0 },
+        BTTS: { wins: 0, losses: 0, exp: 0, badBeats: 0 },
+        '1X2': { wins: 0, losses: 0, exp: 0, badBeats: 0 }
+      };
+      let pmWins = 0, pmLosses = 0, pmExp = 0, pmBadBeats = 0;
+
+      for (const g of PREMATCH_GAMES) {
+        if (g.outcome !== 'WON' && g.outcome !== 'LOST') continue;
+        const cat = pmCatStats[g.marketCategory] ? g.marketCategory : '1X2';
+        const prob = Math.min(0.90, Math.max(0.20, Number(g.mainPick?.modelProb || 55) / 100));
+        if (g.outcome === 'WON') {
+          pmWins++; pmExp += prob;
+          pmCatStats[cat].wins++; pmCatStats[cat].exp += prob;
+        } else {
+          const audit = evaluateAntiOverfittingAudit(g);
+          if (audit.shortLabel.includes('VARIANZA')) {
+            pmBadBeats++;
+            pmCatStats[cat].badBeats++;
+          } else {
+            pmLosses++; pmExp += prob;
+            pmCatStats[cat].losses++; pmCatStats[cat].exp += prob;
+          }
+        }
+      }
+
+      const prematchByCat = {};
+      for (const [k, v] of Object.entries(pmCatStats)) {
+        prematchByCat[k] = { ...shrinkBucket(v.wins, v.losses, v.exp), badBeats: v.badBeats };
+      }
+      const prematchGlobal = { ...shrinkBucket(pmWins, pmLosses, pmExp), badBeats: pmBadBeats };
+
+      // B) Segnali Live ("LIVE_SIGNALS_HISTORY")
+      const liveKindStats = {
+        over: { wins: 0, losses: 0, exp: 0 },
+        '1h': { wins: 0, losses: 0, exp: 0 },
+        next: { wins: 0, losses: 0, exp: 0 },
+        ltd: { wins: 0, losses: 0, exp: 0 },
+        under: { wins: 0, losses: 0, exp: 0 },
+        gg: { wins: 0, losses: 0, exp: 0 }
+      };
+      let lvWins = 0, lvLosses = 0, lvExp = 0;
+
+      for (const item of LIVE_SIGNALS_HISTORY) {
+        if (item.triggerStatus === 'BLOCKED_NO_BET' || item.outcome === 'SAVED') continue;
+        if (item.outcome !== 'WON' && item.outcome !== 'LOST') continue;
+        const kind = item.sigKind || getLiveSignalKind(item.id);
+        const fairOdd = Math.max(1.15, Number(item.fairOddAtTrigger || 1.60));
+        const expProb = Math.min(0.85, Math.max(0.20, 1 / fairOdd));
+        if (item.outcome === 'WON') {
+          lvWins++; lvExp += expProb;
+          if (liveKindStats[kind]) { liveKindStats[kind].wins++; liveKindStats[kind].exp += expProb; }
+        } else {
+          lvLosses++; lvExp += expProb;
+          if (liveKindStats[kind]) { liveKindStats[kind].losses++; liveKindStats[kind].exp += expProb; }
+        }
+      }
+
+      const liveByKind = {};
+      for (const [k, v] of Object.entries(liveKindStats)) {
+        liveByKind[k] = shrinkBucket(v.wins, v.losses, v.exp);
+      }
+      const liveGlobal = shrinkBucket(lvWins, lvLosses, lvExp);
+
+      return {
+        prematch: { global: prematchGlobal, byCat: prematchByCat },
+        live: { global: liveGlobal, byKind: liveByKind }
+      };
+    }
+
     function ensureAutoPostMortem(game) {
       if (!game || game.status !== 'FT') return;
       if (!game.finalXg && game.finalScore) {
@@ -5008,9 +5141,20 @@
                 <div class="text-[10px] md:text-xs text-[var(--muted-foreground)]">Pesi bloccati su Bad Beat xG</div>
               </div>
               <div class="p-2.5 md:p-3 rounded-xl bg-[var(--background)] border border-[var(--border)]">
-                <div class="text-[10px] md:text-xs text-[var(--muted-foreground)]">Soglia Anti-Overfitting</div>
-                <div class="text-sm md:text-lg font-mono font-bold text-[var(--warning)] mt-0.5">Min. 15 Partite</div>
-                <div class="text-[10px] md:text-xs text-[var(--muted-foreground)]">Shrinkage Bayesiano -2.5%</div>
+                <div class="text-[10px] md:text-xs text-[var(--muted-foreground)]">Auto-Calibrazione (Prono + Live)</div>
+                ${(() => {
+                  const ac = computeAdaptiveModelCalibration();
+                  const pmD = ac.prematch.global.deltaPct;
+                  const lvD = ac.live.global.deltaPct;
+                  return `
+                    <div class="text-xs md:text-sm font-mono font-bold text-[var(--warning)] mt-0.5">
+                      Prono ${pmD >= 0 ? '+' : ''}${pmD}% • Live ${lvD >= 0 ? '+' : ''}${lvD}%
+                    </div>
+                    <div class="text-[10px] md:text-xs text-[var(--muted-foreground)]">
+                      ${ac.prematch.global.guardrailStatus} | Live ${ac.live.global.n}/15
+                    </div>
+                  `;
+                })()}
               </div>
             </div>
           </div>
@@ -5323,7 +5467,8 @@
       // 4. Bonus Convergenza Pre-Match (+10)
       const convPts = preMatchInfo.matched ? 10 : 4;
 
-      const score = Math.min(99, Math.max(8, timePts + deficitPts + pressurePts + convPts));
+      const liveCalAdj = computeAdaptiveModelCalibration().live.global.scoreAdj || 0;
+      const score = Math.min(99, Math.max(8, timePts + deficitPts + pressurePts + convPts + liveCalAdj));
 
       // Blocco rigido oltre l'82': mai aprire un nuovo segnale al 83'-90'+ (varianza/azzardo puro)
       if (min > 82) {
@@ -5878,8 +6023,9 @@
       const appmBoost = Math.max(0, ((s.appmHome + s.appmAway) - 1.6) * 0.012);
       const preMatchBoost = preMatchInfo.matched ? 0.06 : 0;
 
+      const liveCalMult = computeAdaptiveModelCalibration().live.global.mult || 1.0;
       const LIVE_MIN_OPERATIONAL_ODD = preMatchInfo.matched ? 1.50 : 1.60;
-      const lambdaRemTotal = Math.max(0.22, ((baseXgRate * 0.45 + recentXgRate * 0.55) + sibFactor * 0.2 + appmBoost) * remMins + preMatchBoost);
+      const lambdaRemTotal = Math.max(0.22, (((baseXgRate * 0.45 + recentXgRate * 0.55) + sibFactor * 0.2 + appmBoost) * remMins + preMatchBoost) * liveCalMult);
       const probNextGoal = Math.min(0.78, Math.max(0.18, 1 - Math.exp(-lambdaRemTotal)));
       const fairOddOver = +(1 / probNextGoal).toFixed(2);
       const minBetfairOver = calcMinBetfairBackOdd(fairOddOver, 0.05);
@@ -6359,6 +6505,7 @@
         }
       }
       if (changed) {
+        saveUiState();
         if (currentPage === 'palinsesto') renderPalinsesto();
         if (currentPage === 'storico') renderStoricoPage();
         renderBetSlip();
@@ -6494,7 +6641,7 @@
             marketCategory,
             bookieOdd,
             fairOdd,
-            modelProb,
+            modelProb: +Math.min(89, Math.max(25, modelProb * (computeAdaptiveModelCalibration().prematch.byCat[marketCategory]?.mult || 1.0))).toFixed(1),
             evPercent,
             confidence: +(Math.min(9.1, 7.2 + evPercent * 0.12)).toFixed(1),
             tag: `⚡ FEED REALE ${dateShort}`,
@@ -6534,6 +6681,7 @@
         }
 
         if ((added || events.length > 0)) {
+          if (added) saveUiState();
           if (currentPage === 'palinsesto') renderPalinsesto();
           if (currentPage === 'storico') renderStoricoPage();
           renderBetSlip();

@@ -5622,6 +5622,110 @@
       }
     }
 
+    const _resolvedEspnPastDates = new Set();
+    let _isResolvingStalePending = false;
+
+    async function resolveStalePendingLiveSignals(forceRefresh = false) {
+      if (_isResolvingStalePending) return;
+      const pendingItems = LIVE_SIGNALS_HISTORY.filter(i => i.outcome === 'PENDING');
+      if (pendingItems.length === 0) return;
+
+      _isResolvingStalePending = true;
+      try {
+        const ymdSet = new Set();
+        const fmtYmd = (dt) => {
+          const y = dt.getFullYear();
+          const m = String(dt.getMonth() + 1).padStart(2, '0');
+          const d = String(dt.getDate()).padStart(2, '0');
+          return `${y}${m}${d}`;
+        };
+
+        const now = new Date();
+        for (const offset of [0, -1, -2]) {
+          const dt = new Date(now);
+          dt.setDate(dt.getDate() + offset);
+          ymdSet.add(fmtYmd(dt));
+        }
+
+        for (const item of pendingItems) {
+          const m = String(item.dateLabel || '').match(/(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?/);
+          if (m) {
+            const dd = parseInt(m[1], 10);
+            const mm = parseInt(m[2], 10) - 1;
+            const yyyy = parseInt(m[3] || now.getFullYear(), 10);
+            for (const offset of [-1, 0, 1]) {
+              const dt = new Date(yyyy, mm, dd + offset);
+              ymdSet.add(fmtYmd(dt));
+            }
+          }
+        }
+
+        const todayYmd = fmtYmd(now);
+        for (const ymd of ymdSet) {
+          if (!forceRefresh && ymd !== todayYmd && _resolvedEspnPastDates.has(ymd)) continue;
+          try {
+            const res = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates=${ymd}`);
+            if (res.ok) {
+              const data = await res.json();
+              if (Array.isArray(data.events) && data.events.length > 0) {
+                autoGradeLiveSignalsHistory(data.events);
+              }
+              if (ymd !== todayYmd) _resolvedEspnPastDates.add(ymd);
+            }
+          } catch (_) {}
+        }
+
+        // Fallback per singolo eventId ESPN (es. campionati o fusi orari extra)
+        for (const item of LIVE_SIGNALS_HISTORY) {
+          if (item.outcome !== 'PENDING') continue;
+          if (!String(item.matchId || '').startsWith('live-real-')) continue;
+          const evId = String(item.matchId).replace('live-real-', '');
+          if (!/^\d+$/.test(evId)) continue;
+          try {
+            const sumRes = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/all/summary?event=${evId}`);
+            if (sumRes.ok) {
+              const sumData = await sumRes.json();
+              const hdrComps = sumData?.header?.competitions;
+              if (Array.isArray(hdrComps) && hdrComps.length > 0) {
+                autoGradeLiveSignalsHistory([{ id: evId, competitions: hdrComps }]);
+              }
+            }
+          } catch (_) {}
+        }
+      } finally {
+        _isResolvingStalePending = false;
+      }
+    }
+
+    function resolveLiveSignalManually(snapId) {
+      const item = LIVE_SIGNALS_HISTORY.find(x => x.id === snapId);
+      if (!item) return;
+      const input = prompt(`Inserisci il risultato finale (FT) per "${item.match}" (es. 2-1):`, item.scoreAtTrigger || '1-1');
+      if (!input) return;
+      const m = String(input).match(/(\d+)\s*[-:]\s*(\d+)/);
+      if (!m) {
+        alert('Formato non valido. Usa ad esempio 2-1.');
+        return;
+      }
+      const hScore = parseInt(m[1], 10);
+      const aScore = parseInt(m[2], 10);
+      const parts = String(item.match || '').split('-').map(s => s.trim());
+      item.finalScore = `${hScore} - ${aScore}`;
+      const graded = gradeLiveSignalSelection(item, hScore, aScore, parts[0] || '', parts[1] || '');
+      item.outcome = graded.outcome;
+      item.resolutionNote = `${graded.note} (Chiuso manualmente)`;
+      saveUiState();
+      renderLiveSignalsHistoryPanel('live-signals-history-panel');
+    }
+
+    function dismissPendingLiveSignal(snapId) {
+      const idx = LIVE_SIGNALS_HISTORY.findIndex(x => x.id === snapId);
+      if (idx === -1) return;
+      LIVE_SIGNALS_HISTORY.splice(idx, 1);
+      saveUiState();
+      renderLiveSignalsHistoryPanel('live-signals-history-panel');
+    }
+
     function computeDynamicLiveSignals(m) {
       const s = m.liveStats;
       const min = Math.min(89, Math.max(5, Number(m.minute) || 60));
@@ -6948,6 +7052,13 @@
                 <div class="text-[11px] text-[var(--muted-foreground)] font-mono leading-snug">${item.statsAtTrigger}</div>
                 <div class="text-[11px] font-semibold ${item.triggerStatus === 'ENTER_NOW' ? 'text-[var(--primary)]' : 'text-[var(--warning)]'}">${item.preMatchConvergence}</div>
                 ${item.resolutionNote ? `<div class="text-[11px] text-[var(--muted-foreground)] border-t border-[var(--border)] pt-1.5">${item.resolutionNote}</div>` : ''}
+                ${item.outcome === 'PENDING' ? `
+                  <div class="flex flex-wrap items-center gap-1.5 pt-1">
+                    <button onclick="resolveStalePendingLiveSignals(true)" class="px-2 py-1 rounded bg-[var(--primary)]/15 text-[var(--primary)] border border-[var(--primary)]/40 font-semibold text-[11px]">🔄 Verifica FT</button>
+                    <button onclick="resolveLiveSignalManually('${item.id}')" class="px-2 py-1 rounded bg-[var(--card)] text-[var(--foreground)] border border-[var(--border)] font-semibold text-[11px]">✏️ Inserisci FT</button>
+                    <button onclick="dismissPendingLiveSignal('${item.id}')" class="px-2 py-1 rounded bg-[var(--error)]/10 text-[var(--error)] border border-[var(--error)]/30 font-semibold text-[11px]">🗑️ Rimuovi</button>
+                  </div>
+                ` : ''}
               </div>
             `).join('')}
           </div>
@@ -7001,6 +7112,13 @@
                         ${item.outcome === 'WON' ? '✅ CENTRATO (+€' + pnl + ')' : item.outcome === 'SAVED' ? '🛡️ NO-BET (€0 Persi)' : item.outcome === 'LOST' ? '❌ ERRATO (' + pnl + '€)' : '⏳ IN CORSO'}
                       </span>
                       <div class="text-[11px] text-[var(--muted-foreground)] mt-1 max-w-xs mx-auto">${item.resolutionNote}</div>
+                      ${item.outcome === 'PENDING' ? `
+                        <div class="flex flex-wrap justify-center gap-1 mt-1.5">
+                          <button onclick="resolveStalePendingLiveSignals(true)" class="px-2 py-0.5 rounded bg-[var(--primary)]/15 text-[var(--primary)] border border-[var(--primary)]/40 font-semibold text-[10px]">🔄 Verifica FT</button>
+                          <button onclick="resolveLiveSignalManually('${item.id}')" class="px-2 py-0.5 rounded bg-[var(--card)] text-[var(--foreground)] border border-[var(--border)] font-semibold text-[10px]">✏️ Inserisci FT</button>
+                          <button onclick="dismissPendingLiveSignal('${item.id}')" class="px-2 py-0.5 rounded bg-[var(--error)]/10 text-[var(--error)] border border-[var(--error)]/30 font-semibold text-[10px]">🗑️ Rimuovi</button>
+                        </div>
+                      ` : ''}
                     </td>
                   </tr>
                 `).join('')}

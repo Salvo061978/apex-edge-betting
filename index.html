@@ -5633,11 +5633,18 @@
       _isResolvingStalePending = true;
       try {
         const ymdSet = new Set();
+        const isoDateSet = new Set();
         const fmtYmd = (dt) => {
           const y = dt.getFullYear();
           const m = String(dt.getMonth() + 1).padStart(2, '0');
           const d = String(dt.getDate()).padStart(2, '0');
           return `${y}${m}${d}`;
+        };
+        const fmtIso = (dt) => {
+          const y = dt.getFullYear();
+          const m = String(dt.getMonth() + 1).padStart(2, '0');
+          const d = String(dt.getDate()).padStart(2, '0');
+          return `${y}-${m}-${d}`;
         };
 
         const now = new Date();
@@ -5645,6 +5652,7 @@
           const dt = new Date(now);
           dt.setDate(dt.getDate() + offset);
           ymdSet.add(fmtYmd(dt));
+          isoDateSet.add(fmtIso(dt));
         }
 
         for (const item of pendingItems) {
@@ -5656,13 +5664,16 @@
             for (const offset of [-1, 0, 1]) {
               const dt = new Date(yyyy, mm, dd + offset);
               ymdSet.add(fmtYmd(dt));
+              isoDateSet.add(fmtIso(dt));
             }
           }
         }
 
         const todayYmd = fmtYmd(now);
-        for (const ymd of ymdSet) {
-          if (!forceRefresh && ymd !== todayYmd && _resolvedEspnPastDates.has(ymd)) continue;
+        const ymdList = Array.from(ymdSet).filter(ymd => forceRefresh || ymd === todayYmd || !_resolvedEspnPastDates.has(ymd));
+
+        // 1) ESPN all/scoreboard per le date dei segnali PENDING
+        await Promise.allSettled(ymdList.map(async (ymd) => {
           try {
             const res = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates=${ymd}`);
             if (res.ok) {
@@ -5673,24 +5684,87 @@
               if (ymd !== todayYmd) _resolvedEspnPastDates.add(ymd);
             }
           } catch (_) {}
+        }));
+
+        // 2) Se restano segnali PENDING, interroga i singoli campionati ESPN (es. mex.1, eng.1, ita.1, uefa.nations, ecc.)
+        if (LIVE_SIGNALS_HISTORY.some(i => i.outcome === 'PENDING') && ymdList.length > 0) {
+          const leagueSlugs = [
+            'mex.1', 'mex.2', 'mex.w.1', 'eng.1', 'ita.1', 'esp.1', 'ger.1', 'fra.1',
+            'por.1', 'ned.1', 'bra.1', 'arg.1', 'usa.1', 'uefa.nations', 'concacaf.nations', 'conmebol.worldq'
+          ];
+          const checks = [];
+          for (const ymd of ymdList) {
+            for (const slug of leagueSlugs) {
+              checks.push((async () => {
+                try {
+                  const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${slug}/scoreboard?dates=${ymd}`);
+                  if (r.ok) {
+                    const d = await r.json();
+                    if (Array.isArray(d.events) && d.events.length > 0) {
+                      autoGradeLiveSignalsHistory(d.events);
+                    }
+                  }
+                } catch (_) {}
+              })());
+            }
+          }
+          await Promise.allSettled(checks);
         }
 
-        // Fallback per singolo eventId ESPN (es. campionati o fusi orari extra)
-        for (const item of LIVE_SIGNALS_HISTORY) {
-          if (item.outcome !== 'PENDING') continue;
-          if (!String(item.matchId || '').startsWith('live-real-')) continue;
-          const evId = String(item.matchId).replace('live-real-', '');
-          if (!/^\d+$/.test(evId)) continue;
-          try {
-            const sumRes = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/all/summary?event=${evId}`);
-            if (sumRes.ok) {
-              const sumData = await sumRes.json();
-              const hdrComps = sumData?.header?.competitions;
-              if (Array.isArray(hdrComps) && hdrComps.length > 0) {
-                autoGradeLiveSignalsHistory([{ id: evId, competitions: hdrComps }]);
+        // 3) Fallback TheSportsDB (copre anche campionati minori/giovanili/amichevoli)
+        if (LIVE_SIGNALS_HISTORY.some(i => i.outcome === 'PENDING')) {
+          let sdbUpdated = false;
+          for (const iso of isoDateSet) {
+            if (!LIVE_SIGNALS_HISTORY.some(i => i.outcome === 'PENDING')) break;
+            try {
+              const sdbRes = await fetch(`https://www.thesportsdb.com/api/v1/json/3/eventsday.php?d=${iso}&s=Soccer`);
+              if (!sdbRes.ok) continue;
+              const sdbData = await sdbRes.json();
+              const evs = Array.isArray(sdbData?.events) ? sdbData.events : [];
+              for (const ev of evs) {
+                if (ev.intHomeScore === null || ev.intHomeScore === undefined || ev.intAwayScore === null || ev.intAwayScore === undefined) continue;
+                const st = String(ev.strStatus || '').toUpperCase();
+                if (st && !/(FT|FINISH|AET|AP|ENDED|POST)/.test(st)) continue;
+                const hScore = parseInt(ev.intHomeScore, 10);
+                const aScore = parseInt(ev.intAwayScore, 10);
+                if (isNaN(hScore) || isNaN(aScore)) continue;
+
+                for (const item of LIVE_SIGNALS_HISTORY) {
+                  if (item.outcome !== 'PENDING') continue;
+                  const parts = String(item.match || '').split('-').map(s => s.trim());
+                  const itemHome = parts[0] || '';
+                  const itemAway = parts[1] || '';
+                  if (itemHome && itemAway && teamNamesMatch(itemHome, ev.strHomeTeam || '') && teamNamesMatch(itemAway, ev.strAwayTeam || '')) {
+                    item.finalScore = `${hScore} - ${aScore}`;
+                    const graded = gradeLiveSignalSelection(item, hScore, aScore, itemHome, itemAway);
+                    item.outcome = graded.outcome;
+                    item.resolutionNote = graded.note;
+                    sdbUpdated = true;
+                    sendTelegramLiveResultAlert(item, false);
+                  }
+                }
               }
+            } catch (_) {}
+          }
+          if (sdbUpdated) {
+            saveUiState();
+            renderLiveSignalsHistoryPanel('live-signals-history-panel');
+          }
+        }
+
+        // 4) Feedback visivo se l'utente ha premuto "Verifica FT" ma la partita non è nei feed storici
+        if (forceRefresh) {
+          let changedNote = false;
+          for (const item of LIVE_SIGNALS_HISTORY) {
+            if (item.outcome === 'PENDING') {
+              item.resolutionNote = `⚠️ Risultato FT non trovato nei feed storici (possibile lega non coperta o orario posticipato). Tocca "✏️ Inserisci FT" per chiuderla col punteggio finale oppure "🗑️ Rimuovi".`;
+              changedNote = true;
             }
-          } catch (_) {}
+          }
+          if (changedNote) {
+            saveUiState();
+            renderLiveSignalsHistoryPanel('live-signals-history-panel');
+          }
         }
       } finally {
         _isResolvingStalePending = false;

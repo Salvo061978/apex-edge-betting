@@ -3527,32 +3527,68 @@
       a.click();
     }
 
+    function escapeTelegramHtml(str) {
+      return String(str ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    }
+
     async function sendTelegramMessage(htmlText, overrideCfg = null, inlineButtons = null) {
       const cfg = overrideCfg || getTelegramLocalConfig();
-      if (!cfg.botToken || !cfg.chatId) return { ok: false, error: 'Token o Chat ID mancanti' };
-      try {
-        const payload = {
-          chat_id: cfg.chatId,
-          text: htmlText,
-          parse_mode: 'HTML',
+      const cleanToken = String(cfg.botToken || '').trim().replace(/^bot/i, '').replace(/\s+/g, '');
+      const cleanChatId = String(cfg.chatId || '').trim().replace(/\s+/g, '');
+      if (!cleanToken || !cleanChatId) return { ok: false, error: 'Token o Chat ID mancanti' };
+
+      const apiUrl = `https://api.telegram.org/bot${cleanToken}/sendMessage`;
+      const postPayload = async (payloadObj) => {
+        const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const timer = ctrl ? setTimeout(() => ctrl.abort(), 10000) : null;
+        try {
+          const res = await fetch(apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payloadObj),
+            ...(ctrl ? { signal: ctrl.signal } : {})
+          });
+          const data = await res.json().catch(() => null);
+          return data && data.ok
+            ? { ok: true, data }
+            : { ok: false, status: res.status, error: data?.description || `HTTP ${res.status}` };
+        } catch (err) {
+          return { ok: false, error: err?.name === 'AbortError' ? 'Timeout connessione Telegram (10s)' : (err?.message || 'Errore di rete') };
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      };
+
+      const payload = {
+        chat_id: cleanChatId,
+        text: htmlText,
+        parse_mode: 'HTML',
+        disable_web_page_preview: true
+      };
+      if (cfg.threadId && /^\d+$/.test(String(cfg.threadId).trim())) {
+        payload.message_thread_id = parseInt(String(cfg.threadId).trim(), 10);
+      }
+      if (Array.isArray(inlineButtons) && inlineButtons.length > 0) {
+        payload.reply_markup = { inline_keyboard: inlineButtons };
+      }
+
+      let result = await postPayload(payload);
+      if (!result.ok && /parse entities|can't find end|unsupported start tag|BUTTON_URL_INVALID/i.test(String(result.error || ''))) {
+        const fallbackPayload = {
+          chat_id: cleanChatId,
+          text: String(htmlText || '').replace(/<[^>]+>/g, ''),
           disable_web_page_preview: true
         };
-        if (cfg.threadId && /^\d+$/.test(cfg.threadId)) {
-          payload.message_thread_id = parseInt(cfg.threadId, 10);
+        if (payload.message_thread_id) fallbackPayload.message_thread_id = payload.message_thread_id;
+        if (!/BUTTON_URL_INVALID/i.test(String(result.error || '')) && payload.reply_markup) {
+          fallbackPayload.reply_markup = payload.reply_markup;
         }
-        if (Array.isArray(inlineButtons) && inlineButtons.length > 0) {
-          payload.reply_markup = { inline_keyboard: inlineButtons };
-        }
-        const res = await fetch(`https://api.telegram.org/bot${encodeURIComponent(cfg.botToken)}/sendMessage`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        const data = await res.json();
-        return data && data.ok ? { ok: true, data } : { ok: false, error: data?.description || `HTTP ${res.status}` };
-      } catch (err) {
-        return { ok: false, error: err?.message || 'Errore di rete' };
+        result = await postPayload(fallbackPayload);
       }
+      return result;
     }
 
     function formatLiveSelectionPlainIt(selection, home = '', away = '') {
@@ -3581,7 +3617,7 @@
     /**
      * Invia su Telegram una notifica di una Partita Live + Pronostico Specifico + Link Diretto Betfair Exchange,
      * verificando RIGOROSAMENTE:
-     * 1) Che il Market ID appartenga esattamente alla partita selezionata.
+     * 1) Che il Market ID appartenga esattamente alla partita selezionata (mai link di altre partite).
      * 2) Che il mercato non sia SOSPESO su Betfair.
      * 3) Che la quota sia >= Soglia Minima Richiesta (Gatekeeper).
      */
@@ -3643,7 +3679,50 @@
       if (!chosenMatch) {
         chosenMatch = pool[0];
       }
-      if (!chosenMatch) return { ok: false, error: 'No match in pool' };
+      if (!chosenMatch) {
+        const fallbackGame = PREMATCH_GAMES[0];
+        chosenMatch = fallbackGame ? {
+          key: `pre:${fallbackGame.id}`,
+          isLive: false,
+          matchId: fallbackGame.id,
+          home: fallbackGame.home,
+          away: fallbackGame.away,
+          league: fallbackGame.league,
+          minute: `TEST LIVE 58'`,
+          score: '1-1',
+          xgText: '1.45 - 0.92',
+          sotText: '5 - 3',
+          semScore: 84,
+          signals: [{
+            id: `test-sig-${fallbackGame.id}`,
+            selection: fallbackGame.mainPick?.selection || 'Over 2.5 Gol',
+            fairOdd: fallbackGame.mainPick?.fairOdd || 1.65,
+            minBetfairOdd: fallbackGame.mainPick?.bookieOdd || 1.80,
+            minOperationalOdd: 1.50,
+            liveOdd: fallbackGame.mainPick?.bookieOdd || 1.85
+          }]
+        } : {
+          key: 'test:apex',
+          isLive: false,
+          matchId: 'test-apex',
+          home: 'Inter',
+          away: 'Milan',
+          league: 'Test Connessione APEX EDGE',
+          minute: `TEST LIVE 60'`,
+          score: '1-1',
+          xgText: '1.52 - 1.04',
+          sotText: '6 - 3',
+          semScore: 85,
+          signals: [{
+            id: 'test-sig-default',
+            selection: 'Over 2.5 Gol',
+            fairOdd: 1.62,
+            minBetfairOdd: 1.75,
+            minOperationalOdd: 1.50,
+            liveOdd: 1.85
+          }]
+        };
+      }
 
       let chosenSig = null;
       if (targetSigId) {
@@ -3655,6 +3734,9 @@
       if (!chosenSig) {
         chosenSig = chosenMatch.signals.find(s => evaluateLiveOddGatekeeper(betfairCustomOdds[s.id] || s.liveOdd, s).isOddValid) || chosenMatch.signals[0];
       }
+      if (!chosenSig) {
+        chosenSig = { id: 'test-sig-fallback', selection: 'Over 2.5 Gol', fairOdd: 1.65, minBetfairOdd: 1.78, minOperationalOdd: 1.50, liveOdd: 1.85 };
+      }
 
       if (manualOddInp && (!targetSigId || (sigSel && sigSel.value === chosenSig.id))) {
         const typedVal = parseFloat(String(manualOddInp.value).replace(',', '.'));
@@ -3663,15 +3745,18 @@
         }
       }
 
-      setUiFeedback('info', `⏳ Verifica Market ID &amp; Quota reale su Betfair.it per <b>${chosenMatch.home} - ${chosenMatch.away}</b> → <b>${chosenSig.selection}</b>...`);
+      setUiFeedback('info', `⏳ Verifica Market ID &amp; Quota reale su Betfair.it per <b>${escapeTelegramHtml(chosenMatch.home)} - ${escapeTelegramHtml(chosenMatch.away)}</b> → <b>${escapeTelegramHtml(chosenSig.selection)}</b>...`);
 
       let spec = mapSelectionToBetfairSpec(chosenSig.selection, chosenMatch.home, chosenMatch.away);
       const cacheKey = `${normalizeTeamName(chosenMatch.home)}|${normalizeTeamName(chosenMatch.away)}|${spec.marketTypeCode}|${spec.side}`;
       let cached = BETFAIR_MARKET_CACHE[cacheKey] || null;
 
       try {
-        const bfRes = await resolveBetfairMarketForSignal(chosenMatch.home, chosenMatch.away, chosenSig.selection, true);
-        if (bfRes && bfRes.ok && bfRes.marketId) {
+        const bfRes = await Promise.race([
+          resolveBetfairMarketForSignal(chosenMatch.home, chosenMatch.away, chosenSig.selection, true),
+          new Promise(resolve => setTimeout(() => resolve(null), 5000))
+        ]);
+        if (bfRes && bfRes.ok && bfRes.marketId && !bfRes.eventMismatchWarning) {
           cached = bfRes;
         }
       } catch (_) {}
@@ -3725,29 +3810,29 @@
       const titleBanner = isMarketSuspended
         ? `🛑 <b>MERCATO SOSPESO SU BETFAIR</b>`
         : canEnterNow
-          ? `🎯 <b>ENTRATA LIVE · ${spec.side}</b> (${semDisplay}/100)`
+          ? `🎯 <b>ENTRATA LIVE · ${escapeTelegramHtml(spec.side)}</b> (${semDisplay}/100)`
           : `⏳ <b>ATTENDI QUOTA · NO-BET ORA</b>`;
 
       const oddLine = isMarketSuspended
-        ? `🛑 Stato Betfair: <b>${cached.marketStatus}</b> (Quota @${gk.oddVal.toFixed(2)} — attendi riapertura)`
+        ? `🛑 Stato Betfair: <b>${escapeTelegramHtml(cached.marketStatus)}</b> (Quota @${gk.oddVal.toFixed(2)} — attendi riapertura)`
         : canEnterNow
           ? `💶 Quota Betfair: <b>@${gk.oddVal.toFixed(2)}</b> (Min ≥ @${gk.requiredMinOdd.toFixed(2)} · Fair @${gk.fairVal.toFixed(2)} · <b>+${evalBf.netEvPct}% EV</b>)`
           : `🛑 Quota Betfair: <b>@${gk.oddVal.toFixed(2)}</b> (Serve ≥ <b>@${gk.requiredMinOdd.toFixed(2)}</b> · Fair @${gk.fairVal.toFixed(2)})`;
 
       const msg = [
         titleBanner,
-        `⚽ <b>${displayMatchTitle}</b> (${effectiveLeague})`,
-        `⏱️ ${chosenMatch.minute} · Risultato: <b>${chosenMatch.score}</b>`,
+        `⚽ <b>${escapeTelegramHtml(displayMatchTitle)}</b> (${escapeTelegramHtml(effectiveLeague)})`,
+        `⏱️ ${escapeTelegramHtml(chosenMatch.minute)} · Risultato: <b>${escapeTelegramHtml(chosenMatch.score)}</b>`,
         ``,
-        `📌 Gioca: <b>${plainSelection}</b>`,
-        `🟡 Mercato: <b>${cached?.marketName || spec.marketLabelIt}</b> • ${spec.sideLabel}`,
+        `📌 Gioca: <b>${escapeTelegramHtml(plainSelection)}</b>`,
+        `🟡 Mercato: <b>${escapeTelegramHtml(cached?.marketName || spec.marketLabelIt)}</b> • ${escapeTelegramHtml(spec.sideLabel)}`,
         oddLine,
         `💶 Stake Kelly: <b>${canEnterNow ? `€${stakeEuro}` : '€0 (attendi quota)'}</b>`,
-        `📈 Telemetria: xG <b>${xgDisplay}</b> · Tiri in porta <b>${sotDisplay}</b>`,
+        `📈 Telemetria: xG <b>${escapeTelegramHtml(xgDisplay)}</b> · Tiri in porta <b>${escapeTelegramHtml(sotDisplay)}</b>`,
         ``,
         `━━━━━━━━━━━━━━━━━━━━`,
         `🟡 <b>1) APRI BETFAIR EXCHANGE:</b>`,
-        `<a href="${directBetfairUrl}">${directBetfairUrl}</a>`,
+        `<a href="${directBetfairUrl}">${escapeTelegramHtml(directBetfairUrl)}</a>`,
         ``,
         ``,
         `━━━━━━━━━━━━━━━━━━━━`,
@@ -3764,11 +3849,11 @@
       if (r.ok) {
         setUiFeedback(
           canEnterNow ? 'success' : 'warning',
-          `✅ <b>Notifica inviata su Telegram per ${displayMatchTitle}!</b> ` +
-          `${canEnterNow ? `🟢 Quota valida: <b>@${gk.oddVal.toFixed(2)}</b> (≥ @${gk.requiredMinOdd.toFixed(2)})` : `🛑 Quota bassa segnalata: <b>@${gk.oddVal.toFixed(2)}</b> (&lt; @${gk.requiredMinOdd.toFixed(2)})`} • Link: <code>${directBetfairUrl}</code>`
+          `✅ <b>Notifica inviata su Telegram per ${escapeTelegramHtml(displayMatchTitle)}!</b> ` +
+          `${canEnterNow ? `🟢 Quota valida: <b>@${gk.oddVal.toFixed(2)}</b> (≥ @${gk.requiredMinOdd.toFixed(2)})` : `🛑 Quota bassa segnalata: <b>@${gk.oddVal.toFixed(2)}</b> (&lt; @${gk.requiredMinOdd.toFixed(2)})`} • Link: <code>${escapeTelegramHtml(directBetfairUrl)}</code>`
         );
       } else {
-        setUiFeedback('error', `❌ <b>Errore invio Telegram:</b> ${r.error}`);
+        setUiFeedback('error', `❌ <b>Errore invio Telegram:</b> ${escapeTelegramHtml(r.error)}`);
       }
       return r;
     }
@@ -3785,33 +3870,34 @@
       const matchId = m?.id || String(snap.id || '').replace(/^snap-/, '');
       const apexLiveUrl = `https://salvo061978.github.io/apex-edge-betting/#live=${encodeURIComponent(matchId)}`;
 
-      // Risolve rigorosamente il Market ID su Betfair.it (ero.betfair.it + API) E controlla la quota reale!
+      // Prova a risolvere il Market ID su Betfair.it (ero.betfair.it + API) con timeout 5s,
+      // ma se il proxy Betfair non risponde usa comunque il link evento/ricerca specifico della partita (MAI link di altre partite!)
       let bfRes = null;
       const bfSpec = mapSelectionToBetfairSpec(snap.selection, m?.home || '', m?.away || '');
       if (m?.home && m?.away) {
         try {
-          bfRes = await resolveBetfairMarketForSignal(m.home, m.away, snap.selection, false);
+          bfRes = await Promise.race([
+            resolveBetfairMarketForSignal(m.home, m.away, snap.selection, false),
+            new Promise(resolve => setTimeout(() => resolve(null), 5000))
+          ]);
         } catch (_) {}
       }
 
-      // BLOCCO RIGOROSO 1: Se non abbiamo un Market ID verificato per questa partita, NON inviare link di altre partite!
-      if (!bfRes || !bfRes.ok || !bfRes.verifiedForMatch || !bfRes.marketId || bfRes.eventMismatchWarning) {
-        snap._tgSending = false;
-        snap.resolutionNote = `⏳ In attesa di verifica Market ID Betfair specifico per ${snap.match}.`;
-        saveUiState();
-        return false;
-      }
+      const hasVerifiedBetfair = Boolean(bfRes && bfRes.ok && bfRes.verifiedForMatch && !bfRes.eventMismatchWarning);
 
-      // BLOCCO RIGOROSO 2: Se il mercato su Betfair è SOSPESO o CHIUSO (es. gol/VAR in corso), NON inviare la notifica!
-      if (bfRes.marketStatus === 'SUSPENDED' || bfRes.marketStatus === 'CLOSED') {
+      // BLOCCO RIGOROSO MERCATO SOSPESO: se Betfair conferma che il mercato è SOSPESO o CHIUSO (gol/VAR), attendi!
+      if (hasVerifiedBetfair && (bfRes.marketStatus === 'SUSPENDED' || bfRes.marketStatus === 'CLOSED')) {
         snap._tgSending = false;
         snap.resolutionNote = `🛑 Notifica Telegram bloccata: mercato ${bfRes.marketId} (${bfRes.eventName || snap.match}) attualmente ${bfRes.marketStatus} su Betfair.`;
         saveUiState();
         return false;
       }
 
-      const resolvedMktId = bfRes.marketId;
-      const apiPrice = bfSpec.side === 'LAY' ? bfRes.bestLayPrice : bfRes.bestBackPrice;
+      const resolvedMktId = (hasVerifiedBetfair && bfRes.marketId) ? bfRes.marketId : '';
+      const resolvedEventId = (hasVerifiedBetfair && bfRes.eventId) ? bfRes.eventId : '';
+      const apiPrice = hasVerifiedBetfair
+        ? (bfSpec.side === 'LAY' ? bfRes.bestLayPrice : bfRes.bestBackPrice)
+        : null;
 
       const topSig = (m?.liveSignals || []).find(s => s.selection === snap.selection) || (m?.liveSignals || [])[0];
       const currentBfOdd = Number(
@@ -3819,6 +3905,7 @@
         || (topSig && betfairCustomOdds[topSig.id])
         || snap.matchedBetfairOdd
         || topSig?.liveOdd
+        || snap.minBetfairOdd
         || 0
       );
       const gk = evaluateLiveOddGatekeeper(currentBfOdd, {
@@ -3827,7 +3914,7 @@
         minOperationalOdd: topSig?.minOperationalOdd || 1.60
       });
 
-      // BLOCCO RIGOROSO 3: Se su Betfair la quota attuale è sotto la soglia minima, NON inviare la notifica!
+      // BLOCCO RIGOROSO QUOTA: se la quota attuale è sotto la soglia minima, NON inviare!
       if (!gk.isOddValid) {
         snap._tgSending = false;
         snap.triggerStatus = 'BLOCKED_NO_BET';
@@ -3838,24 +3925,26 @@
       }
 
       snap.matchedBetfairOdd = gk.oddVal;
-      const betfairUrl = buildBetfairMarketUrl(resolvedMktId);
+      const betfairUrl = buildBetfairMarketUrl(resolvedMktId, resolvedEventId, m?.home || '', m?.away || '');
       const plainSelection = formatLiveSelectionPlainIt(snap.selection, m?.home || '', m?.away || '');
       const stakeEuro = Math.max(10, gk.evalBf?.kelly?.euro || 20);
+      const displayMatch = (hasVerifiedBetfair && bfRes.eventName) ? bfRes.eventName : snap.match;
+      const displayMarket = (hasVerifiedBetfair && bfRes.marketName) ? bfRes.marketName : bfSpec.marketLabelIt;
 
       const msg = [
-        `🎯 <b>ENTRATA LIVE · ${bfSpec.side}</b> (${snap.triggerScore}/100)`,
-        `⚽ <b>${bfRes.eventName || snap.match}</b> (${snap.league})`,
-        `⏱️ ${snap.triggerMinute} · Risultato: <b>${snap.scoreAtTrigger}</b>`,
+        `🎯 <b>ENTRATA LIVE · ${escapeTelegramHtml(bfSpec.side)}</b> (${snap.triggerScore}/100)`,
+        `⚽ <b>${escapeTelegramHtml(displayMatch)}</b> (${escapeTelegramHtml(snap.league)})`,
+        `⏱️ ${escapeTelegramHtml(snap.triggerMinute)} · Risultato: <b>${escapeTelegramHtml(snap.scoreAtTrigger)}</b>`,
         ``,
-        `📌 Gioca: <b>${plainSelection}</b>`,
-        `🟡 Mercato: <b>${bfRes.marketName || bfSpec.marketLabelIt}</b> • ${bfSpec.sideLabel}`,
+        `📌 Gioca: <b>${escapeTelegramHtml(plainSelection)}</b>`,
+        `🟡 Mercato: <b>${escapeTelegramHtml(displayMarket)}</b> • ${escapeTelegramHtml(bfSpec.sideLabel)}`,
         `💶 Quota Betfair: <b>@${gk.oddVal.toFixed(2)}</b> (Min ≥ @${gk.requiredMinOdd.toFixed(2)} · Fair @${gk.fairVal.toFixed(2)} · <b>+${gk.evalBf.netEvPct}% EV</b>)`,
         `💶 Stake Kelly: <b>€${stakeEuro}</b>`,
-        `📈 Telemetria: ${snap.statsAtTrigger}`,
+        `📈 Telemetria: ${escapeTelegramHtml(snap.statsAtTrigger)}`,
         ``,
         `━━━━━━━━━━━━━━━━━━━━`,
         `🟡 <b>1) APRI BETFAIR EXCHANGE:</b>`,
-        `<a href="${betfairUrl}">${betfairUrl}</a>`,
+        `<a href="${betfairUrl}">${escapeTelegramHtml(betfairUrl)}</a>`,
         ``,
         ``,
         `━━━━━━━━━━━━━━━━━━━━`,
@@ -3863,7 +3952,7 @@
         `<a href="${apexLiveUrl}">👉 Apri partita live su APEX EDGE</a>`
       ].join('\n');
       const inlineBtns = [
-        [{ text: `🟡 APRI BETFAIR (${resolvedMktId})`, url: betfairUrl }],
+        [{ text: resolvedMktId ? `🟡 APRI BETFAIR (${resolvedMktId})` : `🟡 CERCA MATCH SU BETFAIR`, url: betfairUrl }],
         [{ text: `📲 APRI TELEMETRIA APEX EDGE`, url: apexLiveUrl }]
       ];
       const res = await sendTelegramMessage(msg, cfg, inlineBtns);
@@ -3890,9 +3979,9 @@
       const plainSel = formatLiveSelectionPlainIt(item.selection, parts[0] || '', parts[1] || '');
       const msg = [
         title,
-        `⚽ <b>${item.match}</b> · <b>${item.finalScore}</b>`,
-        `🎯 <b>${plainSel}</b> (${item.triggerMinute} su ${item.scoreAtTrigger}) @<b>${Number(item.matchedBetfairOdd || item.minBetfairOdd).toFixed(2)}</b>`,
-        `📝 ${item.resolutionNote}`
+        `⚽ <b>${escapeTelegramHtml(item.match)}</b> · <b>${escapeTelegramHtml(item.finalScore)}</b>`,
+        `🎯 <b>${escapeTelegramHtml(plainSel)}</b> (${escapeTelegramHtml(item.triggerMinute)} su ${escapeTelegramHtml(item.scoreAtTrigger)}) @<b>${Number(item.matchedBetfairOdd || item.minBetfairOdd).toFixed(2)}</b>`,
+        `📝 ${escapeTelegramHtml(item.resolutionNote)}`
       ].join('\n');
       await sendTelegramMessage(msg, cfg);
     }

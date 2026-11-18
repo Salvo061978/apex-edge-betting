@@ -3932,34 +3932,45 @@
     }
 
     function formatIsoDateLocal(d) {
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, '0');
-      const day = String(d.getDate()).padStart(2, '0');
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Europe/Rome',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      }).formatToParts(d);
+      const y = parts.find(p => p.type === 'year')?.value || String(d.getFullYear());
+      const m = parts.find(p => p.type === 'month')?.value || String(d.getMonth() + 1).padStart(2, '0');
+      const day = parts.find(p => p.type === 'day')?.value || String(d.getDate()).padStart(2, '0');
       return `${y}-${m}-${day}`;
     }
 
     function formatShortItDate(d) {
       const days = ['Dom', 'Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab'];
-      return `${days[d.getDay()]} ${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const iso = formatIsoDateLocal(d);
+      const noon = new Date(`${iso}T12:00:00Z`);
+      const wd = days[noon.getUTCDay()];
+      const [, mm, dd] = iso.split('-');
+      return `${wd} ${dd}/${mm}`;
     }
 
     function getDynamicDateInfo() {
-      const today = new Date();
+      const todayIso = formatIsoDateLocal(new Date());
+      const today = new Date(`${todayIso}T12:00:00Z`);
       const yesterday = new Date(today);
-      yesterday.setDate(today.getDate() - 1);
+      yesterday.setUTCDate(today.getUTCDate() - 1);
       const tomorrow = new Date(today);
-      tomorrow.setDate(today.getDate() + 1);
+      tomorrow.setUTCDate(today.getUTCDate() + 1);
       const plus2 = new Date(today);
-      plus2.setDate(today.getDate() + 2);
+      plus2.setUTCDate(today.getUTCDate() + 2);
       const plus3 = new Date(today);
-      plus3.setDate(today.getDate() + 3);
+      plus3.setUTCDate(today.getUTCDate() + 3);
       return {
         today,
         yesterday,
         tomorrow,
         plus2,
         plus3,
-        todayIso: formatIsoDateLocal(today),
+        todayIso,
         yesterdayIso: formatIsoDateLocal(yesterday),
         tomorrowIso: formatIsoDateLocal(tomorrow),
         plus2Iso: formatIsoDateLocal(plus2),
@@ -6484,22 +6495,29 @@
         const hScore = parseInt(homeComp.score || '0', 10) || 0;
         const aScore = parseInt(awayComp.score || '0', 10) || 0;
 
+        const evMs = ev.date ? Date.parse(ev.date) : NaN;
+        const evRomeIso = Number.isFinite(evMs) ? formatIsoDateLocal(new Date(evMs)) : '';
+
         for (const g of PREMATCH_GAMES) {
-          if (teamNamesMatch(g.home, hRaw) && teamNamesMatch(g.away, aRaw)) {
-            g.finalScore = `${hScore} - ${aScore}`;
-            if (state === 'in' && g.status !== 'FT') {
-              g.status = 'LIVE';
-              g.liveClock = comp.status?.type?.shortDetail || ev.status?.displayClock || 'LIVE';
+          const isExactId = g.id === `espn-${ev.id}`;
+          if (!isExactId) {
+            if (!teamNamesMatch(g.home, hRaw) || !teamNamesMatch(g.away, aRaw)) continue;
+            const gIso = inferGameIsoDate(g);
+            if (evRomeIso && gIso && Math.abs(Date.parse(`${evRomeIso}T12:00:00Z`) - Date.parse(`${gIso}T12:00:00Z`)) > 86400000) continue;
+          }
+          g.finalScore = `${hScore} - ${aScore}`;
+          if (state === 'in' && g.status !== 'FT') {
+            g.status = 'LIVE';
+            g.liveClock = comp.status?.type?.shortDetail || ev.status?.displayClock || 'LIVE';
+            changed = true;
+          } else if (state === 'post') {
+            const newOutcome = gradePreMatchSelection(g.mainPick.selection, hScore, aScore, g.home, g.away);
+            if (g.status !== 'FT' || g.outcome !== newOutcome) {
+              g.status = 'FT';
+              g.liveClock = 'FT';
+              g.outcome = newOutcome;
+              ensureAutoPostMortem(g);
               changed = true;
-            } else if (state === 'post') {
-              const newOutcome = gradePreMatchSelection(g.mainPick.selection, hScore, aScore, g.home, g.away);
-              if (g.status !== 'FT' || g.outcome !== newOutcome) {
-                g.status = 'FT';
-                g.liveClock = 'FT';
-                g.outcome = newOutcome;
-                ensureAutoPostMortem(g);
-                changed = true;
-              }
             }
           }
         }
@@ -6524,7 +6542,8 @@
       try {
         const urls = [
           `https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates=${compact}`,
-          `https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.nations/scoreboard?dates=${compact}`
+          `https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.nations/scoreboard?dates=${compact}`,
+          `https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.w.champions/scoreboard?dates=${compact}`
         ];
         const responses = await Promise.allSettled(urls.map(u => fetch(u).then(r => r.ok ? r.json() : null)));
         const eventMap = new Map();
@@ -6556,9 +6575,14 @@
           const awayName = awayComp.team?.shortDisplayName || awayComp.team?.displayName;
           if (!homeName || !awayName) continue;
 
+          const dt = new Date(ev.date || `${isoDate}T19:45:00Z`);
+          const actualRomeIso = Number.isFinite(dt.getTime()) ? formatIsoDateLocal(dt) : isoDate;
+          const hhmm = dt.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Rome' });
+          const dateShort = formatShortItDate(dt);
+
           const already = PREMATCH_GAMES.find(g => {
             if (g.id === `espn-${ev.id}`) return true;
-            return teamNamesMatch(g.home, homeName) && teamNamesMatch(g.away, awayName) && inferGameIsoDate(g) === isoDate;
+            return teamNamesMatch(g.home, homeName) && teamNamesMatch(g.away, awayName) && inferGameIsoDate(g) === actualRomeIso;
           });
 
           const state = comp.status?.type?.state || ev.status?.type?.state;
@@ -6566,7 +6590,13 @@
           const aScore = parseInt(awayComp.score || '0', 10) || 0;
 
           if (already) {
-            already.isoDate = isoDate;
+            already.isoDate = actualRomeIso;
+            if (already.id.startsWith('espn-')) {
+              already.dateLabel = `${dateShort} • ${hhmm}`;
+              already.kickoff = `${dateShort} • ${hhmm}`;
+              already.kickoffHour = hhmm;
+              already.chronoTimestamp = parseKickoffChronoMinutes(already.kickoff, already.timestampOrder || 1);
+            }
             if (state === 'in') {
               already.status = 'LIVE';
               already.finalScore = `${hScore} - ${aScore}`;
@@ -6583,10 +6613,6 @@
 
           if (newCount >= maxNew) continue;
           newCount++;
-
-          const dt = new Date(ev.date || `${isoDate}T19:45:00Z`);
-          const hhmm = dt.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Rome' });
-          const dateShort = formatShortItDate(dt);
           const leagueRaw = ev.league?.name || comp.league?.name || 'Internazionale';
           const lr = leagueRaw.toLowerCase();
           let leagueCat = 'Coppe & Internazionali';
@@ -6660,10 +6686,10 @@
             awayXpts: '10 pt',
             justiceInsight: `Proiezione Poisson da calendario ufficiale (${leagueRaw}): λCasa ${lamH} vs λOspite ${lamA}.`,
             rlmAlert: `Monitoraggio quota reale ${selection} @${bookieOdd} (+${evPercent}% EV).`,
-            tacticalNotes: [`Partita sincronizzata dal calendario ufficiale ${isoDate} (${leagueRaw}).`]
+            tacticalNotes: [`Partita sincronizzata dal calendario ufficiale ${actualRomeIso} (${leagueRaw}).`]
           });
 
-          gameObj.isoDate = isoDate;
+          gameObj.isoDate = actualRomeIso;
           if (state === 'in') {
             gameObj.status = 'LIVE';
             gameObj.finalScore = `${hScore} - ${aScore}`;
@@ -6694,7 +6720,7 @@
 
       const statusEl = document.getElementById('live-sync-status');
       const badgeEl = document.getElementById('live-source-badge');
-      const todayCompact = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      const todayCompact = getDynamicDateInfo().todayIso.replace(/-/g, '');
       const previousSelectedId = selectedLiveId;
 
       const realOngoing = [];
@@ -6714,13 +6740,40 @@
         }
       } catch (_) {}
 
-      // 2) Feed Live Browser-Direct (ESPN Soccer Scoreboard API con CORS aperto)
+      // 2) Feed Live Browser-Direct (ESPN Soccer Scoreboard API multi-lega + calendario di oggi con CORS aperto)
       if (realOngoing.length === 0) {
         try {
-          const espnRes = await fetch('https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard');
-          if (espnRes.ok) {
-            const espnData = await espnRes.json();
-            const events = espnData.events || [];
+          const espnUrls = [
+            'https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard',
+            `https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates=${todayCompact}`,
+            `https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.nations/scoreboard?dates=${todayCompact}`,
+            `https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.w.champions/scoreboard?dates=${todayCompact}`,
+            `https://site.api.espn.com/apis/site/v2/sports/soccer/ita.1/scoreboard?dates=${todayCompact}`,
+            `https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard?dates=${todayCompact}`,
+            `https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/scoreboard?dates=${todayCompact}`,
+            `https://site.api.espn.com/apis/site/v2/sports/soccer/ger.1/scoreboard?dates=${todayCompact}`,
+            `https://site.api.espn.com/apis/site/v2/sports/soccer/fra.1/scoreboard?dates=${todayCompact}`
+          ];
+          const fetchJsonTimed = (u) => {
+            const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+            const t = ctrl ? setTimeout(() => ctrl.abort(), 7000) : null;
+            return fetch(u, ctrl ? { signal: ctrl.signal } : undefined)
+              .then(r => (r && r.ok) ? r.json() : null)
+              .finally(() => { if (t) clearTimeout(t); });
+          };
+          const espnResults = await Promise.allSettled(espnUrls.map(fetchJsonTimed));
+          const evMap = new Map();
+          let anyOk = false;
+          for (const r of espnResults) {
+            if (r.status === 'fulfilled' && r.value && Array.isArray(r.value.events)) {
+              anyOk = true;
+              for (const ev of r.value.events) {
+                if (ev && ev.id && !evMap.has(ev.id)) evMap.set(ev.id, ev);
+              }
+            }
+          }
+          if (anyOk) {
+            const events = Array.from(evMap.values());
             autoGradePalinsestoFromLiveFeed(events);
             autoGradeLiveSignalsHistory(events);
 
@@ -6733,7 +6786,7 @@
               const statusText = `${stType.name || ''} ${stType.shortDetail || ''} ${stType.detail || ''}`.toUpperCase();
               const isActuallyDone = Boolean(stType.completed) || /\b(FT|FINAL|FULL_TIME|END|ENDED|AET|PEN|POSTPONED|CANCELED|CANCELLED|ABANDONED|SUSPENDED|DELAYED|INTERRUPTED|FORFEIT)\b/.test(statusText);
               const kickoffMs = Date.parse(ev.date || comp.date || '');
-              const isStaleZombie = Number.isFinite(kickoffMs) && (Date.now() - kickoffMs > 2.25 * 3600 * 1000);
+              const isStaleZombie = Number.isFinite(kickoffMs) && (Date.now() - kickoffMs > 2.75 * 3600 * 1000);
               if (state === 'in' && !isActuallyDone && !isStaleZombie) {
                 const competitors = comp.competitors || [];
                 const homeComp = competitors.find(c => c.homeAway === 'home') || competitors[0] || {};
@@ -6803,9 +6856,15 @@
       try {
         const bfEvents = await discoverBetfairInPlayAndSearchEvents('', '');
         for (const ev of (bfEvents || [])) {
-          if (!ev || !ev.eventName || !Array.isArray(ev.markets) || ev.markets.length === 0) continue;
-          const openMkts = ev.markets.filter(m => m.inplay && m.status === 'OPEN');
-          if (openMkts.length === 0) continue;
+          if (!ev || !ev.eventName) continue;
+          const hasMarkets = Array.isArray(ev.markets) && ev.markets.length > 0;
+          if (hasMarkets) {
+            const openMkts = ev.markets.filter(m => m.inplay && m.status === 'OPEN');
+            if (openMkts.length === 0) continue;
+          } else {
+            const openMs = ev.openDate ? Date.parse(ev.openDate) : NaN;
+            if (Number.isFinite(openMs) && (Date.now() - openMs > 2.75 * 3600 * 1000)) continue;
+          }
           const parts = ev.eventName.split(/\s+[-–vV]+\s+|\s+vs\.?\s+/);
           const bfHome = (parts[0] || ev.eventName).trim();
           const bfAway = (parts[1] || 'Ospite').trim();
@@ -6875,7 +6934,7 @@
 
       LIVE_MATCHES.splice(0, LIVE_MATCHES.length, ...realOngoing);
       checkEarlyLiveSettlements(LIVE_MATCHES);
-      lastLiveSyncTime = new Date().toLocaleTimeString('it-IT');
+      lastLiveSyncTime = new Date().toLocaleTimeString('it-IT', { timeZone: 'Europe/Rome' });
 
       if (previousSelectedId && LIVE_MATCHES.some(m => m.id === previousSelectedId)) {
         selectedLiveId = previousSelectedId;
@@ -6952,7 +7011,12 @@
 
       if (LIVE_MATCHES.length === 0) {
         const info = getDynamicDateInfo();
-        const upcomingNext = PREMATCH_GAMES.filter(g => inferGameIsoDate(g) === info.todayIso || g.status === 'PRE-MATCH').slice(0, 6);
+        const todayOnly = PREMATCH_GAMES.filter(g => inferGameIsoDate(g) === info.todayIso && g.status !== 'FT');
+        const futureOnly = PREMATCH_GAMES.filter(g => {
+          const d = inferGameIsoDate(g);
+          return d > info.todayIso && g.status === 'PRE-MATCH';
+        });
+        const upcomingNext = [...todayOnly, ...futureOnly].slice(0, 6);
         container.innerHTML = `
           <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 space-y-3">
             <div class="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] pb-2.5">

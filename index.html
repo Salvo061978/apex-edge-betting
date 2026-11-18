@@ -1739,26 +1739,30 @@
     ];
 
     function saveUiState() {
+      const stateObj = {
+        currentPage,
+        selectedDay,
+        palinsestoLayout,
+        selectedLeague,
+        activeDetailMatchId,
+        selectedLiveId,
+        liveAutoRefreshEnabled,
+        betfairCustomOdds,
+        storicoFilter,
+        storicoTab,
+        liveHistoryFilter,
+        sortBy: document.getElementById('sort-prematch')?.value || 'time_asc',
+        outcomeFilter: document.getElementById('filter-outcome')?.value || 'ALL',
+        bankroll: document.getElementById('bankroll-input')?.value || '1000',
+        kelly: document.getElementById('kelly-select')?.value || '0.5'
+      };
       try {
-        const stateObj = {
-          currentPage,
-          selectedDay,
-          palinsestoLayout,
-          selectedLeague,
-          activeDetailMatchId,
-          selectedLiveId,
-          liveAutoRefreshEnabled,
-          betfairCustomOdds,
-          storicoFilter,
-          storicoTab,
-          liveHistoryFilter,
-          sortBy: document.getElementById('sort-prematch')?.value || 'time_asc',
-          outcomeFilter: document.getElementById('filter-outcome')?.value || 'ALL',
-          bankroll: document.getElementById('bankroll-input')?.value || '1000',
-          kelly: document.getElementById('kelly-select')?.value || '0.5'
-        };
-        localStorage.setItem(UI_STATE_STORAGE_KEY, JSON.stringify(stateObj));
         localStorage.setItem(LIVE_HISTORY_STORAGE_KEY, JSON.stringify(LIVE_SIGNALS_HISTORY));
+      } catch (_) {}
+      try {
+        localStorage.setItem(UI_STATE_STORAGE_KEY, JSON.stringify(stateObj));
+      } catch (_) {}
+      try {
         const gradedPrematch = PREMATCH_GAMES.filter(g =>
           g.status === 'FT' || g.outcome === 'WON' || g.outcome === 'LOST' || g.outcome === 'VOID'
         ).slice(-120);
@@ -1772,11 +1776,11 @@
         if (rawHist) {
           const parsedHist = JSON.parse(rawHist);
           if (Array.isArray(parsedHist) && parsedHist.length > 0) {
-            // Uniamo lo storico salvato con i segnali verificati iniziali senza duplicati
+            // Uniamo lo storico salvato con i segnali verificati iniziali preservando sempre le versioni aggiornate salvate dall'utente
             const mapById = new Map();
             INITIAL_LIVE_SIGNALS_HISTORY.forEach(item => mapById.set(item.id, item));
             parsedHist.forEach(item => {
-              if (!mapById.has(item.id)) mapById.set(item.id, item);
+              if (item && item.id) mapById.set(item.id, item);
             });
             LIVE_SIGNALS_HISTORY = Array.from(mapById.values());
           }
@@ -3847,6 +3851,48 @@
 
       const r = await sendTelegramMessage(msg, cfg, inlineBtns);
       if (r.ok) {
+        if (chosenMatch.isLive && canEnterNow) {
+          const sigKind = getLiveSignalKind(chosenSig.id);
+          const lineMatch = String(chosenSig.selection || '').match(/\b(\d+\.\d+)\b/);
+          const lineSuffix = (sigKind === 'over' && lineMatch) ? `-${lineMatch[1]}` : '';
+          const snapId = `live-auto-${chosenMatch.matchId}-${sigKind}${lineSuffix}`;
+          const alreadySaved = LIVE_SIGNALS_HISTORY.find(item =>
+            item.id === snapId || (item.matchId === chosenMatch.matchId && item.selection === chosenSig.selection)
+          );
+          if (!alreadySaved) {
+            LIVE_SIGNALS_HISTORY.unshift({
+              id: snapId,
+              sigKind,
+              matchId: chosenMatch.matchId,
+              recordedAt: Date.now(),
+              dateLabel: `Oggi (${new Date().toLocaleDateString('it-IT', { timeZone: 'Europe/Rome' })})`,
+              match: `${effectiveHome} - ${effectiveAway}`,
+              league: effectiveLeague,
+              triggerStatus: 'ENTER_NOW',
+              triggerScore: semDisplay,
+              triggerMinute: chosenMatch.minute,
+              windowLabel: 'Invio Live Telegram',
+              scoreAtTrigger: chosenMatch.score,
+              statsAtTrigger: `xG Live ${xgDisplay} • Tiri Porta ${sotDisplay}`,
+              preMatchConvergence: 'Invio Live Verificato',
+              selection: chosenSig.selection,
+              signalType: chosenSig.signalType || spec.marketLabelIt,
+              fairOddAtTrigger: gk.fairVal,
+              minBetfairOdd: gk.requiredMinOdd,
+              matchedBetfairOdd: gk.oddVal,
+              finalScore: 'IN CORSO',
+              resolutionNote: `⏳ Segnale Live inviato su Telegram al ${chosenMatch.minute} (${chosenMatch.score}) @${gk.oddVal.toFixed(2)}. Verifica automatica Live / FT.`,
+              outcome: 'PENDING',
+              telegramNotified: true
+            });
+            saveUiState();
+            renderLiveSignalsHistoryPanel('live-signals-history-panel');
+            if (currentPage === 'storico') renderStoricoPage();
+          } else if (!alreadySaved.telegramNotified) {
+            alreadySaved.telegramNotified = true;
+            saveUiState();
+          }
+        }
         setUiFeedback(
           canEnterNow ? 'success' : 'warning',
           `✅ <b>Notifica inviata su Telegram per ${escapeTelegramHtml(displayMatchTitle)}!</b> ` +
@@ -5666,11 +5712,22 @@
       if (!gk.isOddValid) return;
 
       const sigKind = getLiveSignalKind(topSig.id);
-      const snapId = `live-auto-${m.id}-${sigKind}`;
+      const lineMatch = String(topSig.selection || '').match(/\b(\d+\.\d+)\b/);
+      const lineSuffix = (sigKind === 'over' && lineMatch) ? `-${lineMatch[1]}` : '';
+      const snapId = `live-auto-${m.id}-${sigKind}${lineSuffix}`;
+      const legacyKindId = `live-auto-${m.id}-${sigKind}`;
       const legacyId = `live-auto-${m.id}`;
-      const existing = LIVE_SIGNALS_HISTORY.find(item =>
-        item.id === snapId || (sigKind === 'over' && item.id === legacyId)
-      );
+      const existing = LIVE_SIGNALS_HISTORY.find(item => {
+        if (item.id === snapId) return true;
+        if (sigKind === 'over') {
+          if (item.matchId === m.id && (item.sigKind === 'over' || item.id === legacyKindId || item.id === legacyId)) {
+            if (item.outcome === 'PENDING') return true;
+            if (lineMatch && String(item.selection || '').includes(lineMatch[1])) return true;
+          }
+          return false;
+        }
+        return item.id === legacyKindId;
+      });
       if (existing) {
         if (existing.outcome === 'PENDING' && !existing.telegramNotified) {
           sendTelegramLiveEntryAlert(existing, m);
@@ -5683,7 +5740,8 @@
         id: snapId,
         sigKind,
         matchId: m.id,
-        dateLabel: `Oggi (${new Date().toLocaleDateString('it-IT')})`,
+        recordedAt: Date.now(),
+        dateLabel: `Oggi (${new Date().toLocaleDateString('it-IT', { timeZone: 'Europe/Rome' })})`,
         match: `${m.home} - ${m.away}`,
         league: m.league,
         triggerStatus: 'ENTER_NOW',
@@ -5705,6 +5763,8 @@
       };
       LIVE_SIGNALS_HISTORY.unshift(newSnap);
       saveUiState();
+      renderLiveSignalsHistoryPanel('live-signals-history-panel');
+      if (currentPage === 'storico') renderStoricoPage();
       sendTelegramLiveEntryAlert(newSnap, m);
     }
 
@@ -7404,6 +7464,7 @@
       };
 
       const filtered = enriched.filter(({ item }) => {
+        if (liveHistoryFilter === 'PENDING') return item.outcome === 'PENDING';
         if (liveHistoryFilter === 'WON') return item.outcome === 'WON';
         if (liveHistoryFilter === 'LOST') return item.outcome === 'LOST';
         if (liveHistoryFilter === 'SAVED') return item.outcome === 'SAVED' || item.triggerStatus === 'BLOCKED_NO_BET';
@@ -7414,6 +7475,8 @@
         const aPend = a.item.outcome === 'PENDING' ? 1 : 0;
         const bPend = b.item.outcome === 'PENDING' ? 1 : 0;
         if (bPend !== aPend) return bPend - aPend;
+        const recDiff = (Number(b.item.recordedAt) || 0) - (Number(a.item.recordedAt) || 0);
+        if (recDiff !== 0) return recDiff;
         const minA = parseInt(String(a.item.triggerMinute || '0'), 10) || 0;
         const minB = parseInt(String(b.item.triggerMinute || '0'), 10) || 0;
         return minB - minA;
@@ -7433,6 +7496,7 @@
             </div>
             <div class="flex flex-wrap items-center gap-1.5 text-xs">
               <button onclick="setLiveHistoryFilter('ALL')" class="px-2.5 py-1 rounded font-semibold ${liveHistoryFilter === 'ALL' ? 'bg-[var(--primary)] text-[var(--primary-foreground)]' : 'bg-[var(--background)] border border-[var(--border)] text-[var(--muted-foreground)]'}">Tutti (${enriched.length})</button>
+              <button onclick="setLiveHistoryFilter('PENDING')" class="px-2.5 py-1 rounded font-semibold ${liveHistoryFilter === 'PENDING' ? 'bg-[#38bdf8] text-black' : 'bg-[var(--background)] border border-[var(--border)] text-[var(--muted-foreground)]'}">⏳ In Corso (${pendingLive})</button>
               <button onclick="setLiveHistoryFilter('WON')" class="px-2.5 py-1 rounded font-semibold ${liveHistoryFilter === 'WON' ? 'bg-[var(--success)] text-white' : 'bg-[var(--background)] border border-[var(--border)] text-[var(--muted-foreground)]'}">✅ Centrati (${wonLive})</button>
               <button onclick="setLiveHistoryFilter('LOST')" class="px-2.5 py-1 rounded font-semibold ${liveHistoryFilter === 'LOST' ? 'bg-[var(--error)] text-white' : 'bg-[var(--background)] border border-[var(--border)] text-[var(--muted-foreground)]'}">❌ Errati (${lostLive})</button>
               <button onclick="setLiveHistoryFilter('SAVED')" class="px-2.5 py-1 rounded font-semibold ${liveHistoryFilter === 'SAVED' ? 'bg-[var(--warning)] text-black' : 'bg-[var(--background)] border border-[var(--border)] text-[var(--muted-foreground)]'}">🛑 Evitati dal Semaforo (${savedLive})</button>

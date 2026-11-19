@@ -7713,6 +7713,11 @@
               <button onclick="setLiveHistoryFilter('WON')" class="px-2.5 py-1 rounded font-semibold ${liveHistoryFilter === 'WON' ? 'bg-[var(--success)] text-white' : 'bg-[var(--background)] border border-[var(--border)] text-[var(--muted-foreground)]'}">✅ Centrati (${wonLive})</button>
               <button onclick="setLiveHistoryFilter('LOST')" class="px-2.5 py-1 rounded font-semibold ${liveHistoryFilter === 'LOST' ? 'bg-[var(--error)] text-white' : 'bg-[var(--background)] border border-[var(--border)] text-[var(--muted-foreground)]'}">❌ Errati (${lostLive})</button>
               <button onclick="setLiveHistoryFilter('SAVED')" class="px-2.5 py-1 rounded font-semibold ${liveHistoryFilter === 'SAVED' ? 'bg-[var(--warning)] text-black' : 'bg-[var(--background)] border border-[var(--border)] text-[var(--muted-foreground)]'}">🛑 Evitati dal Semaforo (${savedLive})</button>
+              <button onclick="exportArchiveToJsonFile()" class="px-2.5 py-1 rounded font-semibold bg-[var(--background)] border border-[var(--primary)]/50 text-[var(--primary)] hover:bg-[var(--primary)] hover:text-[var(--primary-foreground)] transition">📤 Esporta JSON</button>
+              <label class="px-2.5 py-1 rounded font-semibold bg-[var(--primary)]/15 border border-[var(--primary)]/50 text-[var(--primary)] hover:bg-[var(--primary)] hover:text-[var(--primary-foreground)] cursor-pointer transition">
+                📥 Importa JSON
+                <input type="file" accept="application/json,.json" class="hidden" onchange="importArchiveFromJsonFile(this)" />
+              </label>
             </div>
           </div>
 

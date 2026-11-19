@@ -1765,9 +1765,173 @@
       try {
         const gradedPrematch = PREMATCH_GAMES.filter(g =>
           g.status === 'FT' || g.outcome === 'WON' || g.outcome === 'LOST' || g.outcome === 'VOID'
-        ).slice(-120);
+        ).slice(-250);
         localStorage.setItem(PREMATCH_ARCHIVE_STORAGE_KEY, JSON.stringify(gradedPrematch));
       } catch (_) {}
+      scheduleServerArchiveSync();
+    }
+
+    let SERVER_SYNC_ENABLED = false;
+    let _serverCapabilities = { hasEnvTelegram: false, hasEnvBetfair: false, pinRequired: false, tunnelUrl: '' };
+    let _deletedLiveSignalIds = [];
+    let _serverSyncTimer = null;
+    let _serverSyncInFlight = false;
+
+    function getServerPinHeader() {
+      const pin = (() => { try { return localStorage.getItem('apex_server_pin') || ''; } catch (_) { return ''; } })();
+      return pin ? { 'X-Apex-Pin': pin } : {};
+    }
+
+    function applyMergedArchiveFromServer(data) {
+      if (!data || !data.ok) return;
+      let changed = false;
+      if (Array.isArray(data.live) && data.live.length > 0) {
+        const mapLive = new Map();
+        INITIAL_LIVE_SIGNALS_HISTORY.forEach(item => mapLive.set(item.id, item));
+        LIVE_SIGNALS_HISTORY.forEach(item => { if (item && item.id) mapLive.set(item.id, item); });
+        data.live.forEach(item => { if (item && item.id) mapLive.set(item.id, item); });
+        const deletedSet = new Set([..._deletedLiveSignalIds, ...(data.deletedLiveIds || [])]);
+        _deletedLiveSignalIds = Array.from(deletedSet);
+        LIVE_SIGNALS_HISTORY = Array.from(mapLive.values()).filter(x => !deletedSet.has(x.id));
+        changed = true;
+      }
+      if (Array.isArray(data.prematch) && data.prematch.length > 0) {
+        for (const archived of data.prematch) {
+          if (!archived || !archived.id) continue;
+          const idx = PREMATCH_GAMES.findIndex(g => g.id === archived.id);
+          if (idx >= 0) {
+            if (PREMATCH_GAMES[idx].status !== 'FT' && archived.status === 'FT') {
+              PREMATCH_GAMES[idx] = archived;
+              changed = true;
+            }
+          } else {
+            PREMATCH_GAMES.push(archived);
+            changed = true;
+          }
+        }
+      }
+      if (changed) {
+        try { localStorage.setItem(LIVE_HISTORY_STORAGE_KEY, JSON.stringify(LIVE_SIGNALS_HISTORY)); } catch (_) {}
+        try {
+          const gradedPrematch = PREMATCH_GAMES.filter(g => g.status === 'FT' || g.outcome === 'WON' || g.outcome === 'LOST' || g.outcome === 'VOID').slice(-250);
+          localStorage.setItem(PREMATCH_ARCHIVE_STORAGE_KEY, JSON.stringify(gradedPrematch));
+        } catch (_) {}
+        if (currentPage === 'palinsesto') renderPalinsesto();
+        if (currentPage === 'storico') renderStoricoPage();
+        renderLiveSignalsHistoryPanel('live-signals-history-panel');
+      }
+    }
+
+    async function syncArchiveWithServer(pushLocal = true) {
+      if (!SERVER_SYNC_ENABLED || _serverSyncInFlight) return null;
+      _serverSyncInFlight = true;
+      try {
+        if (pushLocal) {
+          const gradedPrematch = PREMATCH_GAMES.filter(g =>
+            g.status === 'FT' || g.outcome === 'WON' || g.outcome === 'LOST' || g.outcome === 'VOID'
+          );
+          const res = await fetch('/api/archive/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...getServerPinHeader() },
+            body: JSON.stringify({
+              prematch: gradedPrematch,
+              live: LIVE_SIGNALS_HISTORY,
+              deletedLiveIds: _deletedLiveSignalIds
+            })
+          });
+          if (res.ok) {
+            const data = await res.json();
+            applyMergedArchiveFromServer(data);
+            return data;
+          }
+        } else {
+          const res = await fetch('/api/archive', { headers: getServerPinHeader() });
+          if (res.ok) {
+            const data = await res.json();
+            applyMergedArchiveFromServer(data);
+            return data;
+          }
+        }
+      } catch (_) {} finally {
+        _serverSyncInFlight = false;
+      }
+      return null;
+    }
+
+    function scheduleServerArchiveSync() {
+      if (!SERVER_SYNC_ENABLED) return;
+      if (_serverSyncTimer) clearTimeout(_serverSyncTimer);
+      _serverSyncTimer = setTimeout(() => { syncArchiveWithServer(true); }, 1200);
+    }
+
+    async function detectLocalApexServer() {
+      try {
+        const res = await fetch('/api/health');
+        if (!res.ok) return false;
+        const data = await res.json();
+        if (data && data.ok && data.mode === 'local-server') {
+          SERVER_SYNC_ENABLED = true;
+          _serverCapabilities = {
+            hasEnvTelegram: Boolean(data.hasEnvTelegram),
+            hasEnvBetfair: Boolean(data.hasEnvBetfair),
+            pinRequired: Boolean(data.pinRequired),
+            tunnelUrl: data.tunnelUrl || ''
+          };
+          if (data.pinRequired && !getServerPinHeader()['X-Apex-Pin'] && typeof prompt === 'function') {
+            const entered = prompt('🔒 Inserisci il PIN di accesso configurato in .env (APEX_ACCESS_PIN):');
+            if (entered) {
+              try { localStorage.setItem('apex_server_pin', entered.trim()); } catch (_) {}
+            }
+          }
+          if (_serverCapabilities.hasEnvTelegram) {
+            updateTelegramVaultBadge({ botToken: 'ENV', chatId: 'ENV', enabled: true });
+          }
+          await syncArchiveWithServer(true);
+          if (currentPage === 'storico') renderStoricoPage();
+          return true;
+        }
+      } catch (_) {}
+      return false;
+    }
+
+    function exportArchiveToJsonFile() {
+      const gradedPrematch = PREMATCH_GAMES.filter(g =>
+        g.status === 'FT' || g.outcome === 'WON' || g.outcome === 'LOST' || g.outcome === 'VOID'
+      );
+      const payload = {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        source: window.location.origin,
+        prematch: gradedPrematch,
+        live: LIVE_SIGNALS_HISTORY,
+        deletedLiveIds: _deletedLiveSignalIds
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `apex_edge_archivio_${formatIsoDateLocal(new Date())}.json`;
+      a.click();
+    }
+
+    async function importArchiveFromJsonFile(fileInput) {
+      const file = fileInput?.files?.[0];
+      if (!file) return;
+      try {
+        const txt = await file.text();
+        const parsed = JSON.parse(txt);
+        const incomingLive = Array.isArray(parsed.live) ? parsed.live : [];
+        const incomingPm = Array.isArray(parsed.prematch) ? parsed.prematch : [];
+        applyMergedArchiveFromServer({ ok: true, live: incomingLive, prematch: incomingPm, deletedLiveIds: parsed.deletedLiveIds || [] });
+        saveUiState();
+        if (SERVER_SYNC_ENABLED) await syncArchiveWithServer(true);
+        if (typeof alert === 'function') {
+          alert(`✅ Archivio unito con successo! (+${incomingPm.length} Pre-Match, +${incomingLive.length} Live analizzati senza duplicati).`);
+        }
+      } catch (err) {
+        if (typeof alert === 'function') alert(`❌ File JSON non valido: ${err?.message || err}`);
+      } finally {
+        if (fileInput) fileInput.value = '';
+      }
     }
 
     function loadUiState() {
@@ -1875,6 +2039,9 @@
       const domThread = document.getElementById('tg-local-threadid')?.value.trim() || '';
       const domEn = document.getElementById('tg-local-enabled')?.checked !== false;
       const domRes = document.getElementById('tg-local-results')?.checked !== false;
+      if ((!domTok || !domChat) && SERVER_SYNC_ENABLED && _serverCapabilities.hasEnvTelegram) {
+        return { botToken: '__ENV__', chatId: '__ENV__', threadId: domThread, enabled: domEn, notifyResults: domRes };
+      }
       return { botToken: domTok, chatId: domChat, threadId: domThread, enabled: domEn, notifyResults: domRes };
     }
 
@@ -2294,6 +2461,17 @@
     }
 
     async function fetchViaGetProxy(targetUrl) {
+      // 0) Se l'app è servita dal server locale Python (o Cloudflare Tunnel), usa /api/proxy (zero problemi CORS!)
+      if (SERVER_SYNC_ENABLED) {
+        try {
+          const localRes = await fetchWithTimeout(`/api/proxy?url=${encodeURIComponent(targetUrl)}`, 6000);
+          if (localRes.ok) {
+            const localTxt = await localRes.text();
+            if (localTxt && localTxt.length > 5) return localTxt;
+          }
+        } catch (_) {}
+      }
+
       // Per gli endpoint JSON pubblici di Betfair (ero.betfair.it / ips.betfair.it), prova prima il fetch diretto!
       if (/^https:\/\/(ero|ips)\.betfair\.(it|com)\//i.test(targetUrl)) {
         try {
@@ -3542,6 +3720,29 @@
       const cfg = overrideCfg || getTelegramLocalConfig();
       const cleanToken = String(cfg.botToken || '').trim().replace(/^bot/i, '').replace(/\s+/g, '');
       const cleanChatId = String(cfg.chatId || '').trim().replace(/\s+/g, '');
+
+      // Se attivo il server locale con credenziali .env, inoltra direttamente dal backend (zero token nel browser!)
+      if (SERVER_SYNC_ENABLED && (_serverCapabilities.hasEnvTelegram || (cleanToken && cleanChatId))) {
+        try {
+          const res = await fetch('/api/telegram/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...getServerPinHeader() },
+            body: JSON.stringify({
+              text: htmlText,
+              inlineButtons,
+              botToken: cleanToken,
+              chatId: cleanChatId,
+              threadId: cfg.threadId || ''
+            })
+          });
+          const data = await res.json().catch(() => null);
+          if (data && data.ok) return { ok: true, data };
+          if (_serverCapabilities.hasEnvTelegram) {
+            return { ok: false, error: data?.error || `HTTP ${res.status}` };
+          }
+        } catch (_) {}
+      }
+
       if (!cleanToken || !cleanChatId) return { ok: false, error: 'Token o Chat ID mancanti' };
 
       const apiUrl = `https://api.telegram.org/bot${cleanToken}/sendMessage`;
@@ -5056,6 +5257,9 @@
           if (audit.shortLabel.includes('VARIANZA')) {
             pmBadBeats++;
             pmCatStats[cat].badBeats++;
+            // Peso attenuato (0.40x) sui bad beat: evita di scartare del tutto le sconfitte gonfiando artificiosamente il Win Rate
+            pmLosses += 0.40; pmExp += prob * 0.40;
+            pmCatStats[cat].losses += 0.40; pmCatStats[cat].exp += prob * 0.40;
           } else {
             pmLosses++; pmExp += prob;
             pmCatStats[cat].losses++; pmCatStats[cat].exp += prob;
@@ -5248,8 +5452,17 @@
               <span class="px-1.5 py-0.5 rounded bg-black/20 font-mono text-[10px] md:text-[11px]">${liveWon}V-${liveTriggered.length - liveWon}P (${liveWinRate}%)</span>
             </button>
           </div>
-          <div class="text-[10px] md:text-[11px] font-mono text-[var(--muted-foreground)]">
-            🛡️ Protezione Anti-Overfitting: <strong>N ≥ 15 Match</strong> + Audit xG Reali
+          <div class="flex flex-wrap items-center gap-1.5 text-[10px] md:text-[11px] font-mono">
+            <span class="px-2 py-1 rounded border ${SERVER_SYNC_ENABLED ? 'bg-[var(--success)]/15 text-[var(--success)] border-[var(--success)]/40 font-bold' : 'bg-[var(--background)] text-[var(--muted-foreground)] border-[var(--border)]'}">
+              ${SERVER_SYNC_ENABLED ? '🟢 Archivio Unico PC+Mobile SYNC' : '💾 Solo Browser Locale'}
+            </span>
+            <button onclick="exportArchiveToJsonFile()" class="px-2.5 py-1 rounded bg-[var(--background)] border border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)] font-semibold transition">
+              📤 Esporta JSON
+            </button>
+            <label class="px-2.5 py-1 rounded bg-[var(--primary)]/15 border border-[var(--primary)]/50 text-[var(--primary)] hover:bg-[var(--primary)] hover:text-[var(--primary-foreground)] font-semibold cursor-pointer transition">
+              📥 Importa / Unisci JSON
+              <input type="file" accept="application/json,.json" class="hidden" onchange="importArchiveFromJsonFile(this)" />
+            </label>
           </div>
         </div>
 
@@ -7895,7 +8108,9 @@
       syncPalinsestoForDate(info.plus3Iso, true);
       syncPalinsestoForDate(info.yesterdayIso, true);
       syncPalinsestoForDate(twoDaysAgoIso, true);
+      detectLocalApexServer();
       setInterval(() => {
+        if (SERVER_SYNC_ENABLED) syncArchiveWithServer(false);
         if (currentPage === 'palinsesto') {
           const activeIso = getIsoDateForSelectedDay(selectedDay) || getDynamicDateInfo().todayIso;
           syncPalinsestoForDate(activeIso, true);

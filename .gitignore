@@ -1,0 +1,15 @@
+# Credenziali locali (MAI su GitHub!)
+.env
+.env.local
+
+# Archivio unico locale e backup
+data/
+*.bak
+*.tmp
+
+# Python & Cloudflare binari/log locali
+__pycache__/
+*.pyc
+cloudflared.exe
+cloudflared
+cloudflared.log

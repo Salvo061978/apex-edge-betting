@@ -1864,34 +1864,39 @@
       _serverSyncTimer = setTimeout(() => { syncArchiveWithServer(true); }, 1200);
     }
 
+    let _serverDetectPromise = null;
     async function detectLocalApexServer() {
-      try {
-        const res = await fetch('/api/health');
-        if (!res.ok) return false;
-        const data = await res.json();
-        if (data && data.ok && data.mode === 'local-server') {
-          SERVER_SYNC_ENABLED = true;
-          _serverCapabilities = {
-            hasEnvTelegram: Boolean(data.hasEnvTelegram),
-            hasEnvBetfair: Boolean(data.hasEnvBetfair),
-            pinRequired: Boolean(data.pinRequired),
-            tunnelUrl: data.tunnelUrl || ''
-          };
-          if (data.pinRequired && !getServerPinHeader()['X-Apex-Pin'] && typeof prompt === 'function') {
-            const entered = prompt('🔒 Inserisci il PIN di accesso configurato in .env (APEX_ACCESS_PIN):');
-            if (entered) {
-              try { localStorage.setItem('apex_server_pin', entered.trim()); } catch (_) {}
+      if (_serverDetectPromise) return _serverDetectPromise;
+      _serverDetectPromise = (async () => {
+        try {
+          const res = await fetch('/api/health');
+          if (!res.ok) return false;
+          const data = await res.json();
+          if (data && data.ok && data.mode === 'local-server') {
+            SERVER_SYNC_ENABLED = true;
+            _serverCapabilities = {
+              hasEnvTelegram: Boolean(data.hasEnvTelegram),
+              hasEnvBetfair: Boolean(data.hasEnvBetfair),
+              pinRequired: Boolean(data.pinRequired),
+              tunnelUrl: data.tunnelUrl || ''
+            };
+            if (data.pinRequired && !getServerPinHeader()['X-Apex-Pin'] && typeof prompt === 'function') {
+              const entered = prompt('🔒 Inserisci il PIN di accesso configurato in .env (APEX_ACCESS_PIN):');
+              if (entered) {
+                try { localStorage.setItem('apex_server_pin', entered.trim()); } catch (_) {}
+              }
             }
+            if (_serverCapabilities.hasEnvTelegram) {
+              updateTelegramVaultBadge({ botToken: '__ENV__', chatId: '__ENV__', viaEnv: true, enabled: true });
+            }
+            await syncArchiveWithServer(true);
+            if (currentPage === 'storico') renderStoricoPage();
+            return true;
           }
-          if (_serverCapabilities.hasEnvTelegram) {
-            updateTelegramVaultBadge({ botToken: 'ENV', chatId: 'ENV', enabled: true });
-          }
-          await syncArchiveWithServer(true);
-          if (currentPage === 'storico') renderStoricoPage();
-          return true;
-        }
-      } catch (_) {}
-      return false;
+        } catch (_) {}
+        return false;
+      })();
+      return _serverDetectPromise;
     }
 
     function exportArchiveToJsonFile() {
@@ -2017,6 +2022,12 @@
       }
     }
 
+    function sanitizeTelegramCredValue(v) {
+      const s = String(v || '').trim();
+      if (!s || /^__ENV__$/i.test(s) || /^ENV$/i.test(s)) return '';
+      return s;
+    }
+
     function getTelegramLocalConfig() {
       let parsed = null;
       try {
@@ -2024,32 +2035,38 @@
         if (raw) parsed = JSON.parse(raw);
       } catch (_) {}
       if (!parsed && window._apexTelegramMemCfg) parsed = window._apexTelegramMemCfg;
-      if (parsed && (parsed.botToken || parsed.chatId)) {
-        return {
-          botToken: String(parsed.botToken || '').trim(),
-          chatId: String(parsed.chatId || '').trim(),
-          threadId: String(parsed.threadId || '').trim(),
-          enabled: parsed.enabled !== false,
-          notifyResults: parsed.notifyResults !== false
-        };
+      const savedTok = sanitizeTelegramCredValue(parsed?.botToken);
+      const savedChat = sanitizeTelegramCredValue(parsed?.chatId);
+      const savedThread = sanitizeTelegramCredValue(parsed?.threadId);
+      const domTok = sanitizeTelegramCredValue(document.getElementById('tg-local-token')?.value);
+      const domChat = sanitizeTelegramCredValue(document.getElementById('tg-local-chatid')?.value);
+      const domThread = sanitizeTelegramCredValue(document.getElementById('tg-local-threadid')?.value);
+      const domEnEl = document.getElementById('tg-local-enabled');
+      const domResEl = document.getElementById('tg-local-results');
+      const enabled = parsed ? (parsed.enabled !== false) : (domEnEl ? domEnEl.checked !== false : true);
+      const notifyResults = parsed ? (parsed.notifyResults !== false) : (domResEl ? domResEl.checked !== false : true);
+
+      const finalTok = domTok || savedTok;
+      const finalChat = domChat || savedChat;
+      const finalThread = domThread || savedThread;
+
+      if (finalTok && finalChat) {
+        return { botToken: finalTok, chatId: finalChat, threadId: finalThread, viaEnv: false, enabled, notifyResults };
       }
-      // Fallback: leggi direttamente gli input se compilati nella pagina corrente
-      const domTok = document.getElementById('tg-local-token')?.value.trim() || '';
-      const domChat = document.getElementById('tg-local-chatid')?.value.trim() || '';
-      const domThread = document.getElementById('tg-local-threadid')?.value.trim() || '';
-      const domEn = document.getElementById('tg-local-enabled')?.checked !== false;
-      const domRes = document.getElementById('tg-local-results')?.checked !== false;
-      if ((!domTok || !domChat) && SERVER_SYNC_ENABLED && _serverCapabilities.hasEnvTelegram) {
-        return { botToken: '__ENV__', chatId: '__ENV__', threadId: domThread, enabled: domEn, notifyResults: domRes };
+      if (SERVER_SYNC_ENABLED && _serverCapabilities.hasEnvTelegram) {
+        return { botToken: '__ENV__', chatId: '__ENV__', threadId: finalThread, viaEnv: true, enabled, notifyResults };
       }
-      return { botToken: domTok, chatId: domChat, threadId: domThread, enabled: domEn, notifyResults: domRes };
+      return { botToken: finalTok, chatId: finalChat, threadId: finalThread, viaEnv: false, enabled, notifyResults };
     }
 
     function updateTelegramVaultBadge(cfg) {
       const badge = document.getElementById('tg-vault-badge');
       if (!badge) return;
       if (cfg && cfg.botToken && cfg.chatId) {
-        badge.textContent = cfg.enabled ? 'ATTIVO IN LOCALE' : 'IN PAUSA';
+        const label = cfg.viaEnv || cfg.botToken === '__ENV__'
+          ? (cfg.enabled ? 'ATTIVO DA .ENV' : 'IN PAUSA (.ENV)')
+          : (cfg.enabled ? 'ATTIVO IN LOCALE' : 'IN PAUSA');
+        badge.textContent = label;
         badge.className = cfg.enabled
           ? 'px-1.5 py-0.5 rounded text-[10px] font-mono bg-[var(--success)]/20 text-[var(--success)] border border-[var(--success)]/40'
           : 'px-1.5 py-0.5 rounded text-[10px] font-mono bg-[var(--warning)]/20 text-[var(--warning)] border border-[var(--warning)]/40';
@@ -2151,15 +2168,25 @@
         const tgThread = document.getElementById('tg-local-threadid');
         const tgEn = document.getElementById('tg-local-enabled');
         const tgRes = document.getElementById('tg-local-results');
-        if (tgTok && tg.botToken) tgTok.value = tg.botToken;
-        if (tgChat && tg.chatId) tgChat.value = tg.chatId;
+        const realTgTok = sanitizeTelegramCredValue(tg.botToken);
+        const realTgChat = sanitizeTelegramCredValue(tg.chatId);
+        if (tgTok) {
+          tgTok.value = realTgTok;
+          if (tg.viaEnv && !realTgTok) tgTok.placeholder = '✅ Configurato in .env (server locale)';
+        }
+        if (tgChat) {
+          tgChat.value = realTgChat;
+          if (tg.viaEnv && !realTgChat) tgChat.placeholder = '✅ Configurato in .env (server locale)';
+        }
         if (tgThread && tg.threadId) tgThread.value = tg.threadId;
         if (tgEn) tgEn.checked = tg.enabled;
         if (tgRes) tgRes.checked = tg.notifyResults;
         updateTelegramVaultBadge(tg);
 
         if (st && (v.appKey || v.ssoid || (tg.botToken && tg.chatId))) {
-          st.textContent = '🔒 Credenziali salvate SOLO nella memoria locale di questo dispositivo (0% su GitHub).';
+          st.textContent = tg.viaEnv
+            ? '🔒 Telegram gestito dal file .env del server locale (credenziali mai esposte al browser).'
+            : '🔒 Credenziali salvate SOLO nella memoria locale di questo dispositivo (0% su GitHub).';
         }
       } catch (_) {}
     }
@@ -2176,12 +2203,12 @@
 
       let prevTg = {};
       try { prevTg = JSON.parse(localStorage.getItem(TELEGRAM_LOCAL_VAULT_KEY) || '{}') || {}; } catch (_) {}
-      const domTok = document.getElementById('tg-local-token')?.value.trim() || '';
-      const domChat = document.getElementById('tg-local-chatid')?.value.trim() || '';
-      const domThread = document.getElementById('tg-local-threadid')?.value.trim() || '';
-      const botToken = domTok || String(prevTg.botToken || '').trim();
-      const chatId = domChat || String(prevTg.chatId || '').trim();
-      const threadId = domThread || String(prevTg.threadId || '').trim();
+      const domTok = sanitizeTelegramCredValue(document.getElementById('tg-local-token')?.value);
+      const domChat = sanitizeTelegramCredValue(document.getElementById('tg-local-chatid')?.value);
+      const domThread = sanitizeTelegramCredValue(document.getElementById('tg-local-threadid')?.value);
+      const botToken = domTok || sanitizeTelegramCredValue(prevTg.botToken);
+      const chatId = domChat || sanitizeTelegramCredValue(prevTg.chatId);
+      const threadId = domThread || sanitizeTelegramCredValue(prevTg.threadId);
       const enabled = document.getElementById('tg-local-enabled')?.checked !== false;
       const notifyResults = document.getElementById('tg-local-results')?.checked !== false;
       const tgCfg = { botToken, chatId, threadId, enabled, notifyResults, savedAt: new Date().toISOString() };
@@ -2189,7 +2216,12 @@
 
       window._apexTelegramMemCfg = tgCfg;
       window._apexBetfairMemCfg = bfCfg;
-      updateTelegramVaultBadge(tgCfg);
+      const effectiveTgForBadge = (botToken && chatId)
+        ? tgCfg
+        : (SERVER_SYNC_ENABLED && _serverCapabilities.hasEnvTelegram
+          ? { botToken: '__ENV__', chatId: '__ENV__', viaEnv: true, enabled, notifyResults }
+          : tgCfg);
+      updateTelegramVaultBadge(effectiveTgForBadge);
       updateBetfairVaultBadge(bfCfg);
 
       const st = document.getElementById('bf-vault-status');
@@ -2197,12 +2229,14 @@
         localStorage.setItem(BETFAIR_LOCAL_VAULT_KEY, JSON.stringify(bfCfg));
         localStorage.setItem(TELEGRAM_LOCAL_VAULT_KEY, JSON.stringify(tgCfg));
         if (st) {
-          if (appKey && ssoid && botToken && chatId) {
-            st.textContent = '✅ Betfair (Key + SSOID) e Telegram salvati nella memoria privata di questo dispositivo!';
+          if (appKey && ssoid && ((botToken && chatId) || effectiveTgForBadge.viaEnv)) {
+            st.textContent = '✅ Betfair (Key + SSOID) e Telegram attivi!';
           } else if (appKey && ssoid) {
             st.textContent = '✅ Betfair App Key e SSOID salvati in locale! Ora puoi collegare qualsiasi partita e pronostico Live.';
           } else if (botToken && chatId) {
             st.textContent = '✅ Telegram salvato in locale! (Inserisci anche App Key e SSOID per l\'API Betfair).';
+          } else if (effectiveTgForBadge.viaEnv) {
+            st.textContent = '✅ Telegram attivo dal file .env del server locale!';
           } else {
             st.textContent = '⚠️ Inserisci App Key + SSOID per Betfair oppure Bot Token + Chat ID per Telegram.';
           }
@@ -3717,11 +3751,18 @@
     }
 
     async function sendTelegramMessage(htmlText, overrideCfg = null, inlineButtons = null) {
+      if (!SERVER_SYNC_ENABLED && _serverDetectPromise) {
+        try {
+          await Promise.race([_serverDetectPromise, new Promise(resolve => setTimeout(resolve, 1500))]);
+        } catch (_) {}
+      }
       const cfg = overrideCfg || getTelegramLocalConfig();
-      const cleanToken = String(cfg.botToken || '').trim().replace(/^bot/i, '').replace(/\s+/g, '');
-      const cleanChatId = String(cfg.chatId || '').trim().replace(/\s+/g, '');
+      const realToken = sanitizeTelegramCredValue(cfg.botToken);
+      const realChatId = sanitizeTelegramCredValue(cfg.chatId);
+      const cleanToken = realToken.replace(/^bot/i, '').replace(/\s+/g, '');
+      const cleanChatId = realChatId.replace(/\s+/g, '');
 
-      // Se attivo il server locale con credenziali .env, inoltra direttamente dal backend (zero token nel browser!)
+      // Se attivo il server locale con credenziali .env o browser, inoltra direttamente dal backend
       if (SERVER_SYNC_ENABLED && (_serverCapabilities.hasEnvTelegram || (cleanToken && cleanChatId))) {
         try {
           const res = await fetch('/api/telegram/send', {
@@ -3737,13 +3778,17 @@
           });
           const data = await res.json().catch(() => null);
           if (data && data.ok) return { ok: true, data };
-          if (_serverCapabilities.hasEnvTelegram) {
+          if (!cleanToken || !cleanChatId) {
             return { ok: false, error: data?.error || `HTTP ${res.status}` };
           }
-        } catch (_) {}
+        } catch (err) {
+          if (!cleanToken || !cleanChatId) {
+            return { ok: false, error: err?.message || 'Errore connessione al server locale (/api/telegram/send)' };
+          }
+        }
       }
 
-      if (!cleanToken || !cleanChatId) return { ok: false, error: 'Token o Chat ID mancanti' };
+      if (!cleanToken || !cleanChatId) return { ok: false, error: 'Token Bot o Chat ID mancanti (configura .env o la Cassaforte locale)' };
 
       const apiUrl = `https://api.telegram.org/bot${cleanToken}/sendMessage`;
       const postPayload = async (payloadObj) => {
@@ -3828,6 +3873,9 @@
      */
     async function sendLiveMatchTestToTelegram(targetMatchKey = null, targetSigId = null, isAutoStartup = false, forceEvenIfLowOdd = false) {
       if (isAutoStartup) return { ok: false, skipped: true };
+      if (!SERVER_SYNC_ENABLED && _serverDetectPromise) {
+        try { await Promise.race([_serverDetectPromise, new Promise(resolve => setTimeout(resolve, 1500))]); } catch (_) {}
+      }
       saveBetfairLocalVault();
       const cfg = getTelegramLocalConfig();
       const st = document.getElementById('bf-vault-status');
@@ -4110,6 +4158,9 @@
     }
 
     async function sendTelegramLiveEntryAlert(snap, m) {
+      if (!SERVER_SYNC_ENABLED && _serverDetectPromise) {
+        try { await Promise.race([_serverDetectPromise, new Promise(resolve => setTimeout(resolve, 1500))]); } catch (_) {}
+      }
       const cfg = getTelegramLocalConfig();
       if (!cfg.enabled || !cfg.botToken || !cfg.chatId) return false;
       if (snap._tgSending) return false;
@@ -8070,6 +8121,7 @@
 
     window.addEventListener('DOMContentLoaded', () => {
       loadUiState();
+      detectLocalApexServer();
       const initialHash = parseLiveHashParams();
       if (initialHash) {
         currentPage = 'live';

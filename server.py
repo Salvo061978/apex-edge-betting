@@ -45,21 +45,37 @@ ALLOWED_PROXY_HOSTS = {
 }
 
 
-def load_env_file(path: Path) -> dict:
+def resolve_env_path(path: Path = ENV_FILE) -> Path:
+    if path.exists():
+        return path
+    alt = path.parent / ".env.txt"
+    if alt.exists():
+        print("[!] Trovato '.env.txt' invece di '.env' (estensione nascosta di Windows): lo carico comunque.")
+        return alt
+    return path
+
+
+def load_env_file(path: Path = ENV_FILE, override: bool = False) -> dict:
     env = {}
-    if not path.exists():
+    actual = resolve_env_path(path)
+    if not actual.exists():
         return env
-    for raw_line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+    for raw_line in actual.read_text(encoding="utf-8-sig", errors="ignore").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
+        if line.lower().startswith("export "):
+            line = line[7:].strip()
         key, val = line.split("=", 1)
-        key = key.strip()
+        key = key.strip().lstrip("\ufeff")
         val = val.strip()
         if len(val) >= 2 and ((val[0] == val[-1] == '"') or (val[0] == val[-1] == "'")):
             val = val[1:-1]
+        elif " #" in val:
+            val = val.split(" #", 1)[0].strip()
         env[key] = val
-        os.environ.setdefault(key, val)
+        if override or not os.environ.get(key):
+            os.environ[key] = val
     return env
 
 
@@ -194,16 +210,32 @@ def merge_archives(server_data: dict, incoming: dict) -> dict:
     }
 
 
+def _clean_tg_override(val: str) -> str:
+    s = str(val or "").strip()
+    if s.upper() in ("__ENV__", "ENV"):
+        return ""
+    return s
+
+
 def send_telegram_via_env(html_text: str, inline_buttons=None, override_token="", override_chat="", override_thread="") -> dict:
-    token = (env_get("TELEGRAM_BOT_TOKEN") or override_token or "").strip()
+    if not env_get("TELEGRAM_BOT_TOKEN") or not env_get("TELEGRAM_CHAT_ID"):
+        load_env_file(ENV_FILE, override=True)
+
+    clean_override_tok = _clean_tg_override(override_token)
+    clean_override_chat = _clean_tg_override(override_chat)
+    clean_override_thread = _clean_tg_override(override_thread)
+
+    token = (env_get("TELEGRAM_BOT_TOKEN") or clean_override_tok or "").strip()
     token = re.sub(r"^bot", "", token, flags=re.IGNORECASE)
     token = re.sub(r"\s+", "", token)
-    chat_id = (env_get("TELEGRAM_CHAT_ID") or override_chat or "").strip()
+    chat_id = (env_get("TELEGRAM_CHAT_ID") or clean_override_chat or "").strip()
     chat_id = re.sub(r"\s+", "", chat_id)
-    thread_id = (env_get("TELEGRAM_THREAD_ID") or override_thread or "").strip()
+    thread_id = (env_get("TELEGRAM_THREAD_ID") or clean_override_thread or "").strip()
 
     if not token or not chat_id:
-        return {"ok": False, "error": "TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID mancanti nel file .env"}
+        err = "TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID mancanti nel file .env (o nel pannello browser)"
+        print(f"[Telegram] ❌ {err}")
+        return {"ok": False, "error": err}
 
     api_url = f"https://api.telegram.org/bot{token}/sendMessage"
 
@@ -253,6 +285,10 @@ def send_telegram_via_env(html_text: str, inline_buttons=None, override_token=""
         if "BUTTON_URL_INVALID" not in str(res.get("error") or "").upper() and "reply_markup" in payload:
             fb["reply_markup"] = payload["reply_markup"]
         res = _post(fb)
+    if res.get("ok"):
+        print(f"[Telegram] ✅ Messaggio inviato correttamente (chat_id={chat_id})")
+    else:
+        print(f"[Telegram] ❌ Errore invio Telegram: {res.get('error')}")
     return res
 
 

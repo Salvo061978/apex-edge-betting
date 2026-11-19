@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import signal
+import ssl
 import subprocess
 import sys
 import threading
@@ -217,6 +218,61 @@ def _clean_tg_override(val: str) -> str:
     return s
 
 
+def _is_ssl_cert_error(exc: Exception) -> bool:
+    msg = str(exc or "")
+    reason = getattr(exc, "reason", None)
+    return (
+        isinstance(exc, ssl.SSLError)
+        or isinstance(reason, ssl.SSLError)
+        or "CERTIFICATE_VERIFY_FAILED" in msg
+        or "self-signed certificate" in msg.lower()
+        or "unable to get local issuer" in msg.lower()
+    )
+
+
+def _http_request_with_os_trust(url: str, data: bytes = None, headers: dict = None, method: str = "GET", timeout: int = 10):
+    """Esegue una richiesta HTTPS con urllib; se Windows/Antivirus causa CERTIFICATE_VERIFY_FAILED,
+    usa il curl di sistema (Windows Schannel = archivio certificati nativo Windows)."""
+    hdrs = dict(headers or {})
+    req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.read(), (resp.headers.get("Content-Type") or "application/octet-stream")
+    except urllib.error.HTTPError as he:
+        return he.code, he.read(), (he.headers.get("Content-Type") or "application/json")
+    except Exception as exc:
+        if not _is_ssl_cert_error(exc):
+            raise
+        curl_bin = shutil.which("curl.exe") or shutil.which("curl")
+        if not curl_bin:
+            raise
+        cmd = [curl_bin, "-sS", "--max-time", str(timeout), "-X", method]
+        if os.name == "nt":
+            cmd.append("--ssl-no-revoke")
+        for k, v in hdrs.items():
+            cmd.extend(["-H", f"{k}: {v}"])
+        if data is not None:
+            cmd.extend(["--data-binary", "@-"])
+        cmd.extend(["-w", "\n%{http_code}\n%{content_type}", url])
+        proc = subprocess.run(
+            cmd,
+            input=data if data is not None else b"",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout + 5,
+        )
+        if proc.returncode != 0:
+            err_txt = proc.stderr.decode("utf-8", errors="replace").strip() or f"curl exit {proc.returncode}"
+            raise RuntimeError(f"SSL fallback (curl) fallito: {err_txt}")
+        parts = proc.stdout.rsplit(b"\n", 2)
+        if len(parts) != 3:
+            raise RuntimeError("Risposta curl non valida")
+        body_bytes, status_b, ctype_b = parts
+        status_code = int(status_b.decode("ascii", errors="ignore").strip() or "0")
+        ctype = ctype_b.decode("utf-8", errors="replace").strip() or "application/octet-stream"
+        return status_code, body_bytes, ctype
+
+
 def send_telegram_via_env(html_text: str, inline_buttons=None, override_token="", override_chat="", override_thread="") -> dict:
     if not env_get("TELEGRAM_BOT_TOKEN") or not env_get("TELEGRAM_CHAT_ID"):
         load_env_file(ENV_FILE, override=True)
@@ -241,24 +297,22 @@ def send_telegram_via_env(html_text: str, inline_buttons=None, override_token=""
 
     def _post(payload_obj: dict) -> dict:
         body = json.dumps(payload_obj).encode("utf-8")
-        req = urllib.request.Request(
-            api_url,
-            data=body,
-            headers={"Content-Type": "application/json", "User-Agent": "APEX-EDGE-Local/1.0"},
-            method="POST",
-        )
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                raw = resp.read().decode("utf-8", errors="replace")
-                data = json.loads(raw)
-                return {"ok": bool(data.get("ok")), "data": data, "error": data.get("description")}
-        except urllib.error.HTTPError as he:
-            raw = he.read().decode("utf-8", errors="replace")
+            status_code, raw_bytes, _ = _http_request_with_os_trust(
+                api_url,
+                data=body,
+                headers={"Content-Type": "application/json", "User-Agent": "APEX-EDGE-Local/1.0"},
+                method="POST",
+                timeout=10,
+            )
+            raw = raw_bytes.decode("utf-8", errors="replace")
             try:
                 data = json.loads(raw)
-                return {"ok": False, "status": he.code, "error": data.get("description") or f"HTTP {he.code}"}
             except Exception:
-                return {"ok": False, "status": he.code, "error": f"HTTP {he.code}"}
+                return {"ok": False, "status": status_code, "error": f"HTTP {status_code}: {raw[:160]}"}
+            if status_code >= 400 or not data.get("ok"):
+                return {"ok": False, "status": status_code, "error": data.get("description") or f"HTTP {status_code}"}
+            return {"ok": True, "data": data, "error": None}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
@@ -419,24 +473,23 @@ class ApexHandler(BaseHTTPRequestHandler):
             if u.scheme not in ("http", "https") or (u.hostname or "").lower() not in ALLOWED_PROXY_HOSTS:
                 self._send_json(403, {"ok": False, "error": "Host non consentito nel proxy"})
                 return
-            req = urllib.request.Request(
-                target,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36",
-                    "Accept": "application/json, text/plain, */*",
-                },
-            )
             try:
-                with urllib.request.urlopen(req, timeout=8) as resp:
-                    raw = resp.read()
-                    ctype = resp.headers.get("Content-Type") or "text/plain; charset=utf-8"
-                    self.send_response(200)
-                    self.send_header("Content-Type", ctype)
-                    self.send_header("Content-Length", str(len(raw)))
-                    self.send_header("Cache-Control", "no-store")
-                    self.send_header("Access-Control-Allow-Origin", "*")
-                    self.end_headers()
-                    self.wfile.write(raw)
+                status_code, raw, ctype = _http_request_with_os_trust(
+                    target,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36",
+                        "Accept": "application/json, text/plain, */*",
+                    },
+                    method="GET",
+                    timeout=8,
+                )
+                self.send_response(status_code or 200)
+                self.send_header("Content-Type", ctype or "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(raw)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(raw)
             except Exception as exc:
                 self._send_json(502, {"ok": False, "error": f"Proxy error: {exc}"})
             return
@@ -493,20 +546,23 @@ class ApexHandler(BaseHTTPRequestHandler):
             if not app_key or not ssoid or rpc_payload is None:
                 self._send_json(400, {"ok": False, "error": "BETFAIR_APP_KEY, BETFAIR_SSOID o payload mancanti"})
                 return
-            req = urllib.request.Request(
-                "https://api.betfair.com/exchange/betting/json-rpc/v1",
-                data=json.dumps(rpc_payload).encode("utf-8"),
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                    "X-Application": app_key,
-                    "X-Authentication": ssoid,
-                },
-                method="POST",
-            )
             try:
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    raw = resp.read().decode("utf-8", errors="replace")
+                status_code, raw_bytes, _ = _http_request_with_os_trust(
+                    "https://api.betfair.com/exchange/betting/json-rpc/v1",
+                    data=json.dumps(rpc_payload).encode("utf-8"),
+                    headers={
+                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                        "X-Application": app_key,
+                        "X-Authentication": ssoid,
+                    },
+                    method="POST",
+                    timeout=10,
+                )
+                raw = raw_bytes.decode("utf-8", errors="replace")
+                if status_code >= 400:
+                    self._send_json(502, {"ok": False, "error": f"HTTP {status_code}: {raw[:160]}"})
+                else:
                     self._send_json(200, {"ok": True, "result": json.loads(raw)})
             except Exception as exc:
                 self._send_json(502, {"ok": False, "error": str(exc)})
